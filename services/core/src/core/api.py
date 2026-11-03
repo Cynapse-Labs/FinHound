@@ -19,8 +19,9 @@ store = Store()
 
 class BacktestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    signal_name: str = "quality_momentum"
+    signal_name: str = "momentum_reversal_liquidity"
     mode: str = Field("long_only", pattern="^(long_only|long_short)$")
+    rebalance_frequency: str = Field("weekly", pattern="^(daily|weekly|monthly)$")
     quantile: float = Field(0.1, gt=0, le=1)
     max_position_weight: float = Field(1.0, gt=0, le=1)
     commission_bps: float = Field(1.0, ge=0)

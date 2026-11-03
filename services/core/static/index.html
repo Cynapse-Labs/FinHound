@@ -1,13 +1,78 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>QuantPlatform</title><style>
-body{font-family:system-ui;margin:2rem;background:#fff;color:#222} @media(prefers-color-scheme:dark){body{background:#121212;color:#eee}}
-nav button{margin:.25rem;padding:.5rem} table{border-collapse:collapse}td,th{padding:.35rem;border:1px solid #888}
-</style></head><body><h1>QuantPlatform</h1><nav>
-<button onclick="load('health')">Data Health</button><button onclick="load('factors')">Factors</button>
-<button onclick="load('signals')">Signal Research</button><button onclick="load('backtests')">Backtest</button></nav>
-<pre id="output">Loading...</pre><script>
-async function load(tab){const urls={health:'/qc/summary',factors:'/factors/AAPL',signals:'/signals',backtests:'/backtests'};
-const r=await fetch(urls[tab]);document.querySelector('#output').textContent=JSON.stringify(await r.json(),null,2)}
-load('health');
-</script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FinHound QuantPlatform</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+    nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+    button, select { padding: .5rem .75rem; border: 1px solid #888; border-radius: .35rem; background: transparent; color: inherit; }
+    section { display: none; } section.active { display: block; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #888; padding: .4rem; text-align: left; }
+    canvas { width: 100%; height: 280px; border: 1px solid #888; margin-top: 1rem; }
+    pre { white-space: pre-wrap; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>FinHound QuantPlatform</h1>
+  <nav>
+    <button data-tab="health">Data Health</button>
+    <button data-tab="factors">Factors</button>
+    <button data-tab="research">Signal Research</button>
+    <button data-tab="backtest">Backtest</button>
+  </nav>
+  <section id="health" class="active"><h2>Data Health</h2><div id="health-output"></div></section>
+  <section id="factors"><h2>Factors</h2><label>Symbol <input id="factor-symbol" value="AAPL"></label>
+    <button id="load-factors">Load</button><canvas id="factor-chart" width="1000" height="280"></canvas></section>
+  <section id="research"><h2>Signal Research</h2><p>Research diagnostics are persisted with each backtest.</p><pre id="research-output"></pre></section>
+  <section id="backtest"><h2>Backtest</h2><button id="run-backtest">Run default backtest</button>
+    <pre id="backtest-output"></pre><canvas id="equity-chart" width="1000" height="280"></canvas></section>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    async function get(url) { const response = await fetch(url); if (!response.ok) throw new Error(await response.text()); return response.json(); }
+    function table(rows) {
+      if (!rows.length) return '<p>No data.</p>';
+      const columns = Object.keys(rows[0]);
+      return `<table><thead><tr>${columns.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>` +
+        rows.slice(0, 100).map((r) => `<tr>${columns.map((c) => `<td>${r[c] ?? ''}</td>`).join('')}</tr>`).join('') +
+        '</tbody></table>';
+    }
+    function chart(canvas, series) {
+      const ctx = canvas.getContext('2d'), width = canvas.width, height = canvas.height;
+      ctx.clearRect(0, 0, width, height); ctx.strokeStyle = '#4f8cff';
+      const values = series.map((x) => Number(x)).filter(Number.isFinite);
+      if (!values.length) return;
+      const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+      ctx.beginPath(); values.forEach((value, i) => {
+        const x = i / Math.max(values.length - 1, 1) * width;
+        const y = height - (value - min) / span * (height - 20) - 10;
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      }); ctx.stroke();
+    }
+    async function loadHealth() { $('health-output').innerHTML = table(await get('/qc/summary')); }
+    async function loadFactors() {
+      const rows = await get(`/factors/${encodeURIComponent($('factor-symbol').value)}`);
+      chart($('factor-chart'), rows.filter((x) => x.factor === 'momentum_12_1').map((x) => x.standardized));
+    }
+    async function loadResearch() {
+      const runs = await get('/backtests'); $('research-output').textContent = JSON.stringify(runs, null, 2);
+    }
+    async function runBacktest() {
+      const result = await fetch('/backtests', { method: 'POST', headers: {'content-type': 'application/json'},
+        body: JSON.stringify({signal_name: 'momentum_reversal_liquidity', mode: 'long_only', quantile: .1,
+          max_position_weight: .1, rebalance_frequency: 'weekly'}) }).then((r) => r.json());
+      $('backtest-output').textContent = JSON.stringify(result, null, 2);
+      if (result.run_id) chart($('equity-chart'), (await get(`/backtests/${result.run_id}/equity`)).map((x) => x.strategy));
+      await loadResearch();
+    }
+    document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
+      document.querySelectorAll('section').forEach((section) => section.classList.toggle('active', section.id === button.dataset.tab));
+    });
+    $('load-factors').onclick = loadFactors; $('run-backtest').onclick = runBacktest;
+    loadHealth().catch((error) => $('health-output').textContent = error.message);
+  </script>
+</body>
+</html>

@@ -52,6 +52,36 @@ def metrics(returns: pd.Series, periods: int = 252) -> dict[str, float]:
     }
 
 
+def capped_equal_weights(
+    symbols: pd.Index,
+    gross_exposure: float,
+    cap: float,
+    sign: float = 1.0,
+) -> pd.Series:
+    """Allocate all available exposure while respecting a per-name cap."""
+    if len(symbols) == 0:
+        return pd.Series(dtype=float)
+    if cap * len(symbols) + 1e-12 < gross_exposure:
+        raise ValueError("max_position_weight is too small for the requested exposure")
+    weights = pd.Series(0.0, index=symbols)
+    remaining = float(gross_exposure)
+    active = list(symbols)
+    while active and remaining > 1e-12:
+        allocation = min(cap, remaining / len(active))
+        weights.loc[active] = weights.loc[active] + allocation
+        remaining -= allocation * len(active)
+        active = [symbol for symbol in active if weights.loc[symbol] < cap - 1e-12]
+    return weights * sign
+
+
+def rebalance_dates(index: pd.Index, frequency: str) -> pd.Series:
+    dates = pd.Series(pd.to_datetime(index), index=index)
+    if frequency == "daily":
+        return pd.Series(True, index=index)
+    periods = dates.dt.to_period("W-FRI" if frequency == "weekly" else "M")
+    return periods.ne(periods.shift(1)).to_numpy()
+
+
 def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     prices = store.query("SELECT * FROM clean_prices")
     prices["date"] = pd.to_datetime(prices.date).dt.date
@@ -66,18 +96,24 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     tradable = [c for c in close.columns if c != "SPY"]
     weights = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     quantile = float(config.get("quantile", 0.1))
+    cap = float(config.get("max_position_weight", 1.0))
+    rebalance = rebalance_dates(close.index, config.get("rebalance_frequency", "weekly"))
     for day, row in signal_p.iterrows():
+        if not rebalance[list(close.index).index(day)]:
+            continue
         valid = row[tradable].dropna()
         n = max(1, int(len(valid) * quantile))
+        target_count = max(n, int(np.ceil(1.0 / cap)))
         if config.get("mode", "long_only") == "long_short":
-            winners, losers = valid.nlargest(n).index, valid.nsmallest(n).index
-            weights.loc[day, winners] = 0.5 / n
-            weights.loc[day, losers] = -0.5 / n
+            winners = valid.nlargest(target_count).index
+            losers = valid.nsmallest(target_count).index
+            weights.loc[day, winners] = capped_equal_weights(winners, 0.5, cap)
+            weights.loc[day, losers] = capped_equal_weights(losers, 0.5, cap, -1.0)
         else:
-            winners = valid.nlargest(n).index
-            weights.loc[day, winners] = 1 / n
-    cap = float(config.get("max_position_weight", 1.0))
-    weights = weights.clip(-cap, cap)
+            winners = valid.nlargest(target_count).index
+            weights.loc[day, winners] = capped_equal_weights(winners, 1.0, cap)
+    weights.loc[~rebalance, :] = np.nan
+    weights = weights.ffill().fillna(0.0)
     executed = weights.shift(1).fillna(0.0)
     returns = close.pct_change().fillna(0.0)
     gross = (executed * returns).sum(axis=1)
@@ -108,13 +144,26 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     split = config.get("split_date")
     in_sample = net.loc[net.index < pd.Timestamp(split).date()] if split else net
     out_sample = net.loc[net.index >= pd.Timestamp(split).date()] if split else net.iloc[0:0]
-    signal_quality: dict[str, float] = {}
+    signal_quality: dict[str, Any] = {"ic": {}, "rank_ic": {}, "ic_ir": {}, "decile_spread": {}}
     aligned_signal = signal_p[tradable]
     for horizon in (1, 5, 21):
         forward = close[tradable].pct_change(horizon).shift(-horizon)
-        pairs = pd.concat([aligned_signal.stack(), forward.stack()], axis=1).dropna()
-        signal_quality[f"ic_{horizon}d"] = float(pairs.iloc[:, 0].corr(pairs.iloc[:, 1])) if len(pairs) > 1 else 0.0
-        signal_quality[f"rank_ic_{horizon}d"] = float(pairs.iloc[:, 0].rank().corr(pairs.iloc[:, 1].rank())) if len(pairs) > 1 else 0.0
+        panel = pd.concat([aligned_signal.stack(), forward.stack()], axis=1).dropna()
+        daily_ic = panel.groupby(level=0).apply(lambda x: x.iloc[:, 0].corr(x.iloc[:, 1]))
+        daily_rank_ic = panel.groupby(level=0).apply(lambda x: x.iloc[:, 0].rank().corr(x.iloc[:, 1].rank()))
+        signal_quality["ic"][str(horizon)] = float(daily_ic.mean()) if not daily_ic.empty else 0.0
+        signal_quality["rank_ic"][str(horizon)] = float(daily_rank_ic.mean()) if not daily_rank_ic.empty else 0.0
+        signal_quality["ic_ir"][str(horizon)] = (
+            float(daily_ic.mean() / daily_ic.std(ddof=1) * np.sqrt(252)) if daily_ic.std(ddof=1) else 0.0
+        )
+        deciles = panel.groupby(level=0).apply(
+            lambda x: x.assign(decile=pd.qcut(x.iloc[:, 0].rank(method="first"), 10, labels=False))
+            .groupby("decile", observed=True)
+            .apply(lambda d: d.iloc[:, 1].mean())
+        )
+        if not deciles.empty:
+            spread = deciles.groupby(level=0).agg(["first", "last"])
+            signal_quality["decile_spread"][str(horizon)] = float((spread["last"] - spread["first"]).mean())
     result = {
         "full": metrics(net),
         "in_sample": metrics(in_sample),

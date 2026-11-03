@@ -2,9 +2,9 @@ paths:
   data: /data
   database: /data/store.duckdb
 signal:
-  default: quality_momentum
+  default: momentum_reversal_liquidity
   definitions:
-    quality_momentum:
+    momentum_reversal_liquidity:
       weights:
         momentum_12_1: 0.4
         reversal: 0.1
@@ -13,6 +13,7 @@ signal:
         dollar_volume: 0.2
       liquidity_min_dollar_volume: 10000000
 backtest:
+  rebalance_frequency: weekly
   commission_bps: 1.0
   slippage_bps: 2.0
   borrow_bps: 50.0
