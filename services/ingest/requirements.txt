@@ -4,4 +4,4 @@ pandas==2.2.3
 pyarrow==18.1.0
 PyYAML==6.0.2
 tenacity==9.0.0
-structlog==24.4.0
+structlog==26.1.0
