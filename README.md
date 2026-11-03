@@ -37,34 +37,20 @@ with each other over HTTP.
 - Docker Engine and Docker Compose v2
 - Internet access for the yfinance download
 
-### Run locally
+### Run locally: one setup command
 
-Install the two environments:
-
-```bash
-python3.11 -m venv .venv-core
-python3.11 -m venv .venv-ingest
-.venv-core/bin/pip install -r services/core/requirements.txt
-.venv-ingest/bin/pip install -r services/ingest/requirements.txt
-```
-
-Run the complete pipeline:
+From the repository root, run:
 
 ```bash
+make setup
 make all
 ```
 
-This runs these stages in order:
+`make setup` creates the two required virtual environments and installs the
+exact pinned dependencies. `make all` runs ingestion, QC, factors, signal
+generation, and backtesting in order.
 
-```text
-make ingest
-make qc
-make factors
-make signal
-make backtest
-```
-
-Start the API:
+Start the API in a second terminal:
 
 ```bash
 PYTHONPATH=services/core/src DATA_ROOT=data \
@@ -77,22 +63,22 @@ Then open:
 - <http://localhost:8000/docs> — interactive API documentation
 - <http://localhost:8000/openapi.json> — OpenAPI schema
 
-### Run with Docker
+For one local command that performs setup, runs the pipeline, and starts the
+API, use:
 
 ```bash
-docker compose build
-docker compose run --rm ingest
-docker compose up core
+make local
 ```
 
-Or build and start the application in one command:
+### Run with Docker: no Python setup
 
 ```bash
 make up
 ```
 
-The repository `data/` directory is mounted into both containers. The ingest
-container writes raw data; the core container reads it and serves the API.
+Docker is the easiest option if Python is not installed. The repository
+`data/` directory is mounted into both containers. The ingest container writes
+raw data; the core container reads it and serves the API.
 
 ## 3. Daily commands
 
@@ -108,6 +94,8 @@ container writes raw data; the core container reads it and serves the API.
 | `make lint` | Run Ruff lint and formatting checks. |
 | `make build` | Build Docker images. |
 | `make up` | Start the Docker Compose application. |
+| `make setup` | Create both local virtual environments and install dependencies. |
+| `make local` | Set up, run the full local pipeline, and start the API. |
 
 Generated data is ignored by Git:
 
