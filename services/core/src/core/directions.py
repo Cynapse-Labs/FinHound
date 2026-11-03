@@ -19,10 +19,44 @@ HORIZON_LABELS = {"1d": "1 day", "1w": "1 week", "1m": "1 month", "3m": "3 month
 HORIZON_TO_KEY = {value: key for key, value in HORIZONS.items()}
 
 NATIVE_WEIGHTS: dict[int, dict[str, float]] = {
-    1: {"reversal": 0.3, "momentum_1w": 0.2, "bollinger_z_20": 0.2, "volume_trend": 0.15, "dollar_volume": 0.15},
-    5: {"momentum_1w": 0.25, "reversal": 0.2, "momentum_1m": 0.2, "volatility_20": 0.2, "macd": 0.15},
-    21: {"momentum_3_1": 0.25, "momentum_1m": 0.2, "trend_50": 0.2, "volatility_60": 0.2, "distance_high": 0.15},
-    63: {"momentum_12_1": 0.3, "momentum_6_1": 0.25, "trend_200": 0.2, "volatility_60": 0.15, "drawdown_252": 0.1},
+    1: {
+        "reversal": 0.25,
+        "momentum_1w": 0.15,
+        "bollinger_z_20": 0.15,
+        "volume_surprise_20": 0.15,
+        "intraday_return": 0.15,
+        "money_flow_20": 0.1,
+        "price_efficiency_20": 0.1,
+        "dollar_volume": 0.15,
+    },
+    5: {
+        "momentum_1w": 0.2,
+        "reversal": 0.15,
+        "momentum_1m": 0.15,
+        "volatility_20": 0.15,
+        "volume_trend": 0.15,
+        "residual_momentum_60": 0.2,
+        "momentum_acceleration": 0.1,
+    },
+    21: {
+        "momentum_3_1": 0.2,
+        "momentum_1m": 0.15,
+        "trend_50": 0.15,
+        "volatility_60": 0.15,
+        "distance_high": 0.15,
+        "range_position_20": 0.2,
+        "breakout_20": 0.1,
+    },
+    63: {
+        "momentum_12_1": 0.25,
+        "momentum_6_1": 0.2,
+        "trend_200": 0.15,
+        "volatility_60": 0.15,
+        "drawdown_252": 0.1,
+        "residual_momentum_60": 0.15,
+        "trend_acceleration": 0.1,
+        "idiosyncratic_vol_60": 0.1,
+    },
 }
 
 

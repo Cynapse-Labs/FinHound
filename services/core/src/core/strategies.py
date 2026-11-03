@@ -77,8 +77,26 @@ class StrategyDefinition(BaseModel):
     costs: StrategyCosts = Field(default_factory=StrategyCosts)
     builtin: bool = False
     version: int = Field(1, ge=1)
+    holding_period: str = Field("days to months", min_length=2, max_length=80)
+    edge_source: str = Field("cross-sectional factor signal", min_length=2, max_length=240)
+    realistic_sharpe_min: float | None = Field(None, ge=-10, le=20)
+    realistic_sharpe_max: float | None = Field(None, ge=-10, le=20)
+    implementation_status: Literal["native", "research_only", "data_required"] = "native"
+    data_requirements: list[str] = Field(default_factory=list, max_length=12)
+    symbols: list[str] | None = Field(None, max_length=100)
     created_at: str | None = None
     updated_at: str | None = None
+
+    @model_validator(mode="after")
+    def validate_strategy_metadata(self) -> StrategyDefinition:
+        if self.realistic_sharpe_min is not None and self.realistic_sharpe_max is not None:
+            if self.realistic_sharpe_min > self.realistic_sharpe_max:
+                raise ValueError("realistic_sharpe_min must be less than or equal to realistic_sharpe_max")
+        if self.symbols is not None:
+            self.symbols = sorted({symbol.strip().upper() for symbol in self.symbols if symbol.strip()})
+            if not self.symbols:
+                raise ValueError("symbols must contain at least one non-empty symbol")
+        return self
 
     @field_validator("factor_weights")
     @classmethod
@@ -124,6 +142,12 @@ def _strategy(
     filters: dict[str, Any] | None = None,
     tags: list[str] | None = None,
     qlib_blend: float = 0.7,
+    holding_period: str = "days to months",
+    edge_source: str = "cross-sectional factor signal",
+    realistic_sharpe: tuple[float, float] | None = None,
+    implementation_status: str = "native",
+    data_requirements: list[str] | None = None,
+    symbols: list[str] | None = None,
 ) -> StrategyDefinition:
     return StrategyDefinition(
         id=strategy_id,
@@ -146,6 +170,13 @@ def _strategy(
         ),
         risk=StrategyRisk(target_volatility=target_volatility, drawdown_stop=drawdown_stop),
         builtin=True,
+        holding_period=holding_period,
+        edge_source=edge_source,
+        realistic_sharpe_min=realistic_sharpe[0] if realistic_sharpe else None,
+        realistic_sharpe_max=realistic_sharpe[1] if realistic_sharpe else None,
+        implementation_status=implementation_status,
+        data_requirements=data_requirements or [],
+        symbols=symbols,
     )
 
 
@@ -354,6 +385,190 @@ BUILTIN_STRATEGIES: tuple[StrategyDefinition, ...] = (
         "Ensemble",
         {"momentum_3_1": 0.3, "reversal": 0.25, "bollinger_z_20": 0.2, "trend_50": 0.15, "volatility_20": 0.1},
         tags=["blend", "barbell"],
+    ),
+    _strategy(
+        "statistical_arbitrage",
+        "Statistical Arbitrage",
+        (
+            "Research template for short-horizon mean reversion in correlated assets. "
+            "The daily equity engine provides residual and reversal proxies; pair "
+            "construction and intraday execution require an external research layer."
+        ),
+        "Statistical Arbitrage",
+        {"residual_momentum_60": -0.3, "reversal": 0.3, "low_market_correlation": 0.2, "volatility_20": 0.2},
+        mode="long_short",
+        frequency="daily",
+        quantile=0.1,
+        max_weight=0.05,
+        holding_period="hours to days",
+        edge_source="mean reversion of correlated assets",
+        realistic_sharpe=(1.0, 2.0),
+        implementation_status="research_only",
+        data_requirements=["pair formation", "intraday prices", "borrow availability"],
+        tags=["stat-arb", "research-only", "mean-reversion"],
+    ),
+    _strategy(
+        "pairs_trading",
+        "Pairs Trading",
+        (
+            "Research template for cointegrated relative-value pairs. The factor "
+            "score is only a placeholder ranking; production use requires rolling "
+            "cointegration tests, hedge-ratio estimation, and pair-level execution."
+        ),
+        "Statistical Arbitrage",
+        {"reversal": 0.35, "residual_momentum_60": -0.35, "low_market_correlation": 0.15, "volatility_60": 0.15},
+        mode="long_short",
+        frequency="weekly",
+        quantile=0.1,
+        max_weight=0.05,
+        holding_period="days to weeks",
+        edge_source="cointegration and relative-value reversion",
+        realistic_sharpe=(0.8, 1.5),
+        implementation_status="research_only",
+        data_requirements=["cointegration tests", "pair hedge ratios", "borrow availability"],
+        tags=["pairs", "cointegration", "research-only"],
+    ),
+    _strategy(
+        "market_making",
+        "Market Making",
+        (
+            "Metadata-only research template. Spread capture and inventory control "
+            "cannot be backtested from daily OHLCV bars; use a tick/order-book "
+            "simulator before considering deployment."
+        ),
+        "Market Microstructure",
+        {"dollar_volume": 0.4, "amihud_illiquidity": 0.3, "volatility_20": 0.2, "volume_surprise_20": 0.1},
+        mode="long_short",
+        frequency="daily",
+        quantile=0.05,
+        max_weight=0.02,
+        holding_period="milliseconds to seconds",
+        edge_source="bid-ask spread capture and inventory management",
+        realistic_sharpe=(3.0, 8.0),
+        implementation_status="data_required",
+        data_requirements=["level-2 order book", "tick data", "latency model", "queue position"],
+        tags=["market-making", "microstructure", "data-required"],
+    ),
+    _strategy(
+        "momentum_trend_following",
+        "Momentum / Trend Following",
+        "Medium-horizon persistence strategy combining multi-window momentum, trend, breakouts and volatility control.",
+        "Momentum",
+        {"momentum_12_1": 0.25, "momentum_6_1": 0.2, "trend_200": 0.2, "breakout_60": 0.15, "volatility_60": 0.2},
+        frequency="monthly",
+        quantile=0.2,
+        holding_period="weeks to months",
+        edge_source="persistence of price moves",
+        realistic_sharpe=(0.5, 1.0),
+        tags=["momentum", "trend", "production"],
+    ),
+    _strategy(
+        "cross_sectional_mean_reversion",
+        "Cross-Sectional Equity Mean Reversion",
+        "Long-short daily ranking of recent losers with liquidity and volatility controls.",
+        "Reversal",
+        {"reversal": 0.35, "bollinger_z_20": 0.25, "rsi_14": 0.15, "price_efficiency_20": -0.15, "volatility_20": 0.1},
+        mode="long_short",
+        frequency="daily",
+        quantile=0.1,
+        max_weight=0.05,
+        holding_period="days",
+        edge_source="short-term overreaction reversal",
+        realistic_sharpe=(0.6, 1.2),
+        tags=["mean-reversion", "cross-sectional", "long-short"],
+    ),
+    _strategy(
+        "machine_learning_ensemble",
+        "Machine Learning Ensemble",
+        "Qlib/Alpha158-compatible feature ensemble with a native factor prior and explicit out-of-sample validation requirement.",
+        "Machine Learning",
+        {
+            "momentum_6_1": 0.2,
+            "trend_50": 0.15,
+            "residual_momentum_60": 0.15,
+            "volatility_60": 0.2,
+            "money_flow_20": 0.15,
+            "reversal": 0.15,
+        },
+        engine="auto",
+        horizon="1w",
+        qlib_blend=0.8,
+        holding_period="days to weeks",
+        edge_source="pattern detection and feature engineering",
+        realistic_sharpe=(0.5, 1.5),
+        implementation_status="native",
+        data_requirements=["walk-forward validation", "feature snapshotting", "leakage checks"],
+        tags=["machine-learning", "qlib", "walk-forward"],
+    ),
+    _strategy(
+        "options_volatility_arbitrage",
+        "Options Volatility / Vol-Arb",
+        (
+            "Research template for volatility-surface relative value. Equity factors "
+            "provide an underlying regime prior, but options prices, implied "
+            "volatility and Greeks are required for a real vol-arb backtest."
+        ),
+        "Options",
+        {"volatility_20": 0.25, "volatility_of_volatility": 0.2, "gap_volatility_20": 0.15, "trend_50": 0.2, "reversal": 0.2},
+        mode="long_short",
+        frequency="weekly",
+        quantile=0.1,
+        max_weight=0.03,
+        holding_period="days to weeks",
+        edge_source="volatility-surface mispricings",
+        realistic_sharpe=(0.8, 2.0),
+        implementation_status="data_required",
+        data_requirements=["option chains", "implied volatility surface", "Greeks", "borrow and margin"],
+        tags=["options", "vol-arb", "data-required"],
+    ),
+    _strategy(
+        "high_frequency_trading",
+        "High-Frequency Trading",
+        (
+            "Metadata-only research template. Microsecond latency and queue-position "
+            "effects are outside the daily-bar platform and must be modeled with "
+            "event-time market data."
+        ),
+        "Market Microstructure",
+        {"volume_surprise_20": 0.3, "price_volume_corr_20": 0.2, "volatility_20": 0.2, "dollar_volume": 0.3},
+        mode="long_short",
+        frequency="daily",
+        quantile=0.05,
+        max_weight=0.01,
+        holding_period="microseconds",
+        edge_source="latency and market microstructure",
+        realistic_sharpe=(5.0, 20.0),
+        implementation_status="data_required",
+        data_requirements=["nanosecond timestamps", "full-depth order book", "co-location model", "exchange fees"],
+        tags=["hft", "microstructure", "data-required"],
+    ),
+    _strategy(
+        "amd_regime_momentum",
+        "AMD Regime Momentum",
+        (
+            "AMD-focused semiconductor momentum template combining breakout, gap "
+            "behavior, volume confirmation and volatility-aware trend exposure."
+        ),
+        "Single Stock",
+        {
+            "momentum_1m": 0.2,
+            "momentum_6m": 0.15,
+            "trend_50": 0.15,
+            "breakout_20": 0.15,
+            "volume_surprise_20": 0.15,
+            "gap_volatility_20": 0.1,
+            "volatility_20": 0.1,
+        },
+        horizon="1w",
+        frequency="weekly",
+        quantile=1.0,
+        max_weight=1.0,
+        holding_period="days to weeks",
+        edge_source="single-name trend, breakout and event-regime persistence",
+        realistic_sharpe=(0.3, 1.0),
+        symbols=["AMD"],
+        data_requirements=["AMD price history", "earnings calendar", "optional options chain"],
+        tags=["amd", "single-name", "semiconductor"],
     ),
     _strategy(
         "qlib_alpha158",
@@ -615,6 +830,10 @@ def generate_strategy_signal(
     native = _composite_score(store, definition, since=since)
     if native.empty:
         return native
+    if definition.symbols is not None:
+        native = native[native["symbol"].isin(definition.symbols)].copy()
+        if native.empty:
+            return native
     native = _apply_overlays(store, native, definition, since=since)
     engine = definition.engine
     if engine in {"auto", "qlib"}:

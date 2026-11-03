@@ -11,6 +11,7 @@ from core.backtest import (
     forward_returns,
     rebalance_dates,
     run_backtest,
+    validate_backtest_config,
 )
 
 
@@ -145,6 +146,28 @@ def test_risk_overlays_empty_weights() -> None:
 
     assert executed.empty
     assert diagnostics["drawdown_halts"] == 0
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"rebalance_frequency": "hourly"},
+        {"quantile": 0},
+        {"max_position_weight": 1.5},
+        {"mode": "market_neutral", "long_fraction": 0.5},
+    ],
+)
+def test_invalid_backtest_config_fails_fast(config: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        validate_backtest_config(config)
+
+
+def test_metrics_include_tail_risk() -> None:
+    from core.backtest import metrics
+
+    result = metrics(pd.Series([0.01, -0.02, 0.005, -0.01]))
+    assert {"VaR_95", "CVaR_95", "tail_ratio", "worst_day"} <= result.keys()
+    assert result["CVaR_95"] <= result["VaR_95"]
 
 
 def test_backtest_accepts_signal_missing_universe_symbols(store) -> None:

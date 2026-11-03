@@ -7,6 +7,6 @@ if __name__ == "__main__":
         os.getenv("UNIVERSE_PATH", "/config/universe.yaml"),
         os.getenv("DATA_ROOT", "/data"),
         sleep_seconds=float(os.getenv("INGEST_SLEEP_SECONDS", "0.05")),
-        workers=int(os.getenv("INGEST_WORKERS", "4")),
+        workers=int(os.getenv("INGEST_WORKERS", "1")),
         retries=int(os.getenv("INGEST_RETRIES", "2")),
     )

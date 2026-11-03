@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
 import pandas as pd
@@ -65,6 +66,7 @@ def _ingest_symbol(
     default_start: date,
     end: date,
     provider: HistoricalProvider,
+    provider_lock: Lock,
     sleep_seconds: float,
     retries: int,
 ) -> dict[str, object]:
@@ -84,7 +86,10 @@ def _ingest_symbol(
     last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
-            frame = provider.historical(symbol, start.isoformat(), end.isoformat())
+            # OpenBB/yfinance creates curl-backed resources per request. Keep
+            # those requests serialized even when local file work is parallel.
+            with provider_lock:
+                frame = provider.historical(symbol, start.isoformat(), end.isoformat())
             normal = _normalise(frame, symbol, datetime.now(UTC))
             if not existing.empty:
                 normal = pd.concat([existing, normal], ignore_index=True)
@@ -95,7 +100,7 @@ def _ingest_symbol(
         except Exception as exc:  # noqa: BLE001 - one symbol must not stop the batch
             last_error = exc
             if attempt < retries:
-                time.sleep(min(30.0, 2.0**attempt))
+                time.sleep(min(30.0, max(sleep_seconds, 2.0**attempt)))
     log.error("ingest_symbol_failed", symbol=symbol, error=str(last_error))
     return {"rows": 0, "error": str(last_error), "skipped": False}
 
@@ -114,13 +119,23 @@ def ingest(
     default_start = date.fromisoformat(config.get("start_date", "2015-01-01"))
     end = today or date.today()
     provider = provider or OpenBBProvider()
+    provider_lock = Lock()
     root = Path(data_root) / "raw" / "prices"
     root.mkdir(parents=True, exist_ok=True)
     stats = {"symbols": 0, "rows": 0, "failures": 0}
     run_errors: list[dict[str, str]] = []
 
     def work(symbol: str) -> tuple[str, dict[str, object]]:
-        result = _ingest_symbol(symbol, root, default_start, end, provider, sleep_seconds, retries)
+        result = _ingest_symbol(
+            symbol,
+            root,
+            default_start,
+            end,
+            provider,
+            provider_lock,
+            sleep_seconds,
+            retries,
+        )
         if not result["skipped"]:
             time.sleep(sleep_seconds)
         return symbol, result

@@ -10,7 +10,9 @@ signal:
         reversal: 0.1
         volatility: 0.2
         distance_high: 0.1
-        dollar_volume: 0.2
+        dollar_volume: 0.15
+        residual_momentum_60: 0.15
+        range_position_20: 0.1
       liquidity_min_dollar_volume: 10000000
 directions:
   engine: auto

@@ -35,6 +35,10 @@ def metrics(returns: pd.Series, periods: int = 252) -> dict[str, float]:
             "max_drawdown": 0.0,
             "Calmar": 0.0,
             "hit_rate": 0.0,
+            "VaR_95": 0.0,
+            "CVaR_95": 0.0,
+            "tail_ratio": 0.0,
+            "worst_day": 0.0,
         }
     equity = (1 + returns).cumprod()
     years = len(returns) / periods
@@ -44,6 +48,11 @@ def metrics(returns: pd.Series, periods: int = 252) -> dict[str, float]:
     downside = returns.where(returns < 0, 0).std(ddof=1) * np.sqrt(periods)
     drawdown = equity / equity.cummax() - 1
     max_dd = float(drawdown.min())
+    var_95 = float(returns.quantile(0.05))
+    tail = returns[returns <= var_95]
+    cvar_95 = float(tail.mean()) if not tail.empty else var_95
+    upper = float(returns.quantile(0.95))
+    tail_ratio = upper / abs(var_95) if var_95 < 0 else 0.0
     return {
         "CAGR": float(cagr),
         "annualized_volatility": float(vol),
@@ -52,7 +61,32 @@ def metrics(returns: pd.Series, periods: int = 252) -> dict[str, float]:
         "max_drawdown": max_dd,
         "Calmar": float(cagr / abs(max_dd)) if max_dd else 0.0,
         "hit_rate": float((returns > 0).mean()),
+        "VaR_95": var_95,
+        "CVaR_95": cvar_95,
+        "tail_ratio": float(tail_ratio),
+        "worst_day": float(returns.min()),
     }
+
+
+def validate_backtest_config(config: dict[str, Any]) -> None:
+    """Reject unsafe portfolio settings before any positions are generated."""
+    frequency = config.get("rebalance_frequency", "weekly")
+    if frequency not in {"daily", "weekly", "monthly"}:
+        raise ValueError("rebalance_frequency must be daily, weekly, or monthly")
+    mode = config.get("mode", "long_only")
+    if mode not in {"long_only", "long_short"}:
+        raise ValueError("mode must be long_only or long_short")
+    for name in ("quantile", "max_position_weight", "gross_exposure", "max_gross_exposure"):
+        value = float(config.get(name, 0.0 if name == "quantile" else 1.0))
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be finite and non-negative")
+    if float(config.get("quantile", 0.1)) <= 0 or float(config.get("quantile", 0.1)) > 1:
+        raise ValueError("quantile must be in (0, 1]")
+    if float(config.get("max_position_weight", 0.25)) <= 0 or float(config.get("max_position_weight", 0.25)) > 1:
+        raise ValueError("max_position_weight must be in (0, 1]")
+    long_fraction = float(config.get("long_fraction", 0.5))
+    if mode == "long_short" and not 0 <= long_fraction <= 1:
+        raise ValueError("long_fraction must be between 0 and 1")
 
 
 def capped_equal_weights(
@@ -272,6 +306,7 @@ def signal_diagnostics(
 
 
 def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    validate_backtest_config(config)
     prices = store.query("SELECT * FROM clean_prices")
     prices["date"] = pd.to_datetime(prices.date).dt.date
     signal = signal.copy()
@@ -361,6 +396,12 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         "average_holdings": float((executed != 0).sum(axis=1).mean()),
         "average_gross_exposure": float(gross_exposure.mean()),
         "annual_turnover": float(traded_turnover.mean() * 252),
+        "max_position_weight_observed": float(executed.abs().max().max()) if not executed.empty else 0.0,
+        "concentration_hhi": float(
+            executed.abs().div(executed.abs().sum(axis=1).replace(0, np.nan), axis=0).pow(2).sum(axis=1).replace(np.nan, 0).mean()
+        )
+        if not executed.empty
+        else 0.0,
         "risk_overlay": overlay,
         **diagnostics,
     }
