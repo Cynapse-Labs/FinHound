@@ -35,7 +35,7 @@ def custom_definition(**overrides) -> StrategyDefinition:
 
 
 def test_builtins_are_plural_unique_and_valid() -> None:
-    assert len(BUILTIN_STRATEGIES) >= 20
+    assert len(BUILTIN_STRATEGIES) >= 30
     ids = [strategy.id for strategy in BUILTIN_STRATEGIES]
     assert len(ids) == len(set(ids))
     assert all(strategy.builtin for strategy in BUILTIN_STRATEGIES)
@@ -43,6 +43,36 @@ def test_builtins_are_plural_unique_and_valid() -> None:
         strategy.horizon for strategy in BUILTIN_STRATEGIES
     }
     assert any(strategy.engine == "qlib" for strategy in BUILTIN_STRATEGIES)
+
+
+def test_requested_strategy_families_have_research_metadata() -> None:
+    ids = {strategy.id for strategy in BUILTIN_STRATEGIES}
+    expected = {
+        "statistical_arbitrage",
+        "pairs_trading",
+        "market_making",
+        "momentum_trend_following",
+        "cross_sectional_mean_reversion",
+        "machine_learning_ensemble",
+        "options_volatility_arbitrage",
+        "high_frequency_trading",
+        "amd_regime_momentum",
+    }
+    assert expected <= ids
+    for strategy in BUILTIN_STRATEGIES:
+        assert strategy.holding_period
+        assert strategy.edge_source
+        if strategy.id in {"market_making", "high_frequency_trading", "options_volatility_arbitrage"}:
+            assert strategy.implementation_status == "data_required"
+            assert strategy.data_requirements
+            assert strategy.realistic_sharpe_min is not None
+            assert strategy.realistic_sharpe_max is not None
+
+
+def test_symbol_scoped_strategy_only_emits_requested_symbol(store) -> None:
+    strategy = next(item for item in BUILTIN_STRATEGIES if item.id == "amd_regime_momentum")
+    frame = generate_strategy_signal(store, strategy, persist=False)
+    assert set(frame["symbol"]) <= {"AMD"}
 
 
 def test_tags_are_normalized_and_deduplicated() -> None:

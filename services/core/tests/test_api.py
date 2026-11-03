@@ -89,6 +89,25 @@ def test_factor_catalog_contract(client: TestClient) -> None:
     assert {"name", "label", "group", "description"} <= set(catalog[0])
 
 
+def test_gamma_exposure_endpoint(client: TestClient) -> None:
+    response = client.post(
+        "/options/gamma-exposure",
+        json={
+            "symbol": "SPY",
+            "spot": 100,
+            "options": [
+                {"strike": 95, "option_type": "call", "gamma": 0.02, "open_interest": 100},
+                {"strike": 105, "option_type": "put", "gamma": 0.02, "open_interest": 100},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "SPY"
+    assert body["net_gamma_exposure"] == pytest.approx(0)
+    assert len(body["strikes"]) == 2
+
+
 def test_signal_snapshot_contract(client: TestClient, store) -> None:
     import pandas as pd
 

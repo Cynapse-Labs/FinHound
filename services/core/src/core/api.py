@@ -33,6 +33,7 @@ from .directions import (
     snapshot as directions_snapshot,
 )
 from .factors import compute_factors, factor_catalog
+from .gamma import gamma_exposure
 from .qc import run_qc
 from .qlib_engine import engine_status
 from .qlib_engine import reset as reset_qlib
@@ -342,6 +343,25 @@ class DirectionBuildRequest(BaseModel):
     force: bool = False
 
 
+class OptionGammaRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str | None = None
+    expiration: date | None = None
+    strike: float = Field(gt=0)
+    option_type: str
+    gamma: float = Field(gt=0)
+    open_interest: float = Field(gt=0)
+    contract_size: float = Field(100.0, gt=0)
+    spot: float | None = Field(None, gt=0)
+
+
+class GammaExposureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    symbol: str | None = Field(None, min_length=1, max_length=20)
+    spot: float | None = Field(None, gt=0)
+    options: list[OptionGammaRow] = Field(min_length=1, max_length=100000)
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     data: dict[str, Any] = {}
@@ -405,6 +425,16 @@ def engines() -> dict[str, Any]:
 @app.get("/factors/catalog")
 def factors_catalog() -> list[dict[str, Any]]:
     return factor_catalog()
+
+
+@app.post("/options/gamma-exposure")
+def options_gamma_exposure(body: GammaExposureRequest) -> dict[str, Any]:
+    """Calculate strike-level option gamma exposure from a normalized chain."""
+    frame = pd.DataFrame([row.model_dump() for row in body.options])
+    try:
+        return gamma_exposure(frame, spot=body.spot, symbol=body.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/overview")
