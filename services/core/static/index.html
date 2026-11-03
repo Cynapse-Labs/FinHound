@@ -3,97 +3,582 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FinHound QuantPlatform</title>
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
-    nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
-    button, select { padding: .5rem .75rem; border: 1px solid #888; border-radius: .35rem; background: transparent; color: inherit; }
-    section { display: none; } section.active { display: block; }
-    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-    th, td { border: 1px solid #888; padding: .4rem; text-align: left; }
-    canvas { width: 100%; height: 280px; border: 1px solid #888; margin-top: 1rem; }
-    pre { white-space: pre-wrap; overflow: auto; }
-  </style>
+  <meta name="description" content="FinHound algorithmic and quantitative research dashboard">
+  <title>FinHound · Quant Research Terminal</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <h1>FinHound QuantPlatform</h1>
-  <nav>
-    <button data-tab="health">Data Health</button>
-    <button data-tab="factors">Factors</button>
-    <button data-tab="research">Signal Research</button>
-    <button data-tab="backtest">Backtest</button>
-  </nav>
-  <section id="health" class="active"><h2>Data Health</h2><div id="health-output"></div></section>
-  <section id="factors"><h2>Factors</h2><label>Symbol <input id="factor-symbol" value="AAPL"></label>
-    <button id="load-factors">Load</button><canvas id="factor-chart" width="1000" height="280"></canvas></section>
-  <section id="research"><h2>Signal Research</h2><p>Research diagnostics are persisted with each backtest.</p>
-    <pre id="research-output"></pre><canvas id="ic-chart" width="1000" height="280"></canvas></section>
-  <section id="backtest"><h2>Backtest</h2><button id="run-backtest">Run default backtest</button>
-    <pre id="backtest-output"></pre><canvas id="equity-chart" width="1000" height="280"></canvas>
-    <canvas id="drawdown-chart" width="1000" height="280"></canvas><canvas id="exposure-chart" width="1000" height="280"></canvas></section>
-  <script>
-    const $ = (id) => document.getElementById(id);
-    async function get(url) { const response = await fetch(url); if (!response.ok) throw new Error(await response.text()); return response.json(); }
-    function table(rows) {
-      if (!rows.length) return '<p>No data.</p>';
-      const columns = Object.keys(rows[0]);
-      return `<table><thead><tr>${columns.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>` +
-        rows.slice(0, 100).map((r) => `<tr>${columns.map((c) => `<td>${r[c] ?? ''}</td>`).join('')}</tr>`).join('') +
-        '</tbody></table>';
-    }
-    function chart(canvas, series) {
-      const ctx = canvas.getContext('2d'), width = canvas.width, height = canvas.height;
-      ctx.clearRect(0, 0, width, height); ctx.strokeStyle = '#4f8cff';
-      const values = series.map((x) => Number(x)).filter(Number.isFinite);
-      if (!values.length) return;
-      const min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
-      ctx.beginPath(); values.forEach((value, i) => {
-        const x = i / Math.max(values.length - 1, 1) * width;
-        const y = height - (value - min) / span * (height - 20) - 10;
-        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-      }); ctx.stroke();
-    }
-    async function loadHealth() { $('health-output').innerHTML = table(await get('/qc/summary')); }
-    async function loadFactors() {
-      const rows = await get(`/factors/${encodeURIComponent($('factor-symbol').value)}`);
-      chart($('factor-chart'), rows.filter((x) => x.factor === 'momentum_12_1').map((x) => x.standardized));
-    }
-    async function loadResearch(runId) {
-      const runs = await get('/backtests'); $('research-output').textContent = JSON.stringify(runs, null, 2);
-      const selected = runId || (runs[0] && runs[0].run_id);
-      if (selected) {
-        const rows = await get(`/backtests/${selected}/research`);
-        chart($('ic-chart'), rows.filter((x) => x.kind === 'ic' && x.horizon === 1).map((x) => x.value));
-      }
-    }
-    async function runBacktest() {
-      const result = await fetch('/backtests', { method: 'POST', headers: {'content-type': 'application/json'},
-        body: JSON.stringify({signal_name: 'momentum_reversal_liquidity', mode: 'long_only', quantile: .1,
-          max_position_weight: .25, rebalance_frequency: 'weekly'}) }).then((r) => r.json());
-      $('backtest-output').textContent = JSON.stringify(result, null, 2);
-      let runId = result.run_id;
-      if (result.job_id) {
-        for (let i = 0; i < 120; i += 1) {
-          const job = await get(`/backtests/jobs/${result.job_id}`);
-          if (job.status === 'completed') { runId = job.run_id; break; }
-          if (job.status === 'failed') throw new Error(job.error);
-          await new Promise((resolve) => setTimeout(resolve, 500));
-        }
-      }
-      if (runId) {
-        const rows = await get(`/backtests/${runId}/equity`);
-        chart($('equity-chart'), rows.map((x) => x.strategy));
-        chart($('drawdown-chart'), rows.map((x) => x.drawdown));
-        chart($('exposure-chart'), rows.map((x) => x.gross_exposure));
-      }
-      await loadResearch(runId);
-    }
-    document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
-      document.querySelectorAll('section').forEach((section) => section.classList.toggle('active', section.id === button.dataset.tab));
-    });
-    $('load-factors').onclick = loadFactors; $('run-backtest').onclick = runBacktest;
-    loadHealth().catch((error) => $('health-output').textContent = error.message);
-  </script>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">FH</div>
+      <div>
+        <div class="brand-name">FinHound</div>
+        <div class="brand-sub">Quant Terminal</div>
+      </div>
+    </div>
+    <nav class="nav" aria-label="Sections">
+      <button class="nav-item active" data-tab="overview"><span class="nav-icon">◫</span>Overview</button>
+      <button class="nav-item" data-tab="market"><span class="nav-icon">⌁</span>Market data</button>
+      <button class="nav-item" data-tab="factors"><span class="nav-icon">Σ</span>Factors</button>
+      <button class="nav-item" data-tab="signals"><span class="nav-icon">◈</span>Signals</button>
+      <button class="nav-item" data-tab="forecast"><span class="nav-icon">◐</span>Forecast</button>
+      <button class="nav-item" data-tab="strategies"><span class="nav-icon">☰</span>Strategies</button>
+      <button class="nav-item" data-tab="backtest"><span class="nav-icon">⚡</span>Backtest</button>
+      <button class="nav-item" data-tab="health"><span class="nav-icon">✓</span>Data health</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="status-line"><span id="conn-dot" class="dot"></span><span id="conn-text">Connecting…</span></div>
+      <button id="settings-btn" class="ghost small">API key / settings</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="page-title">Overview</h1>
+        <p id="page-subtitle">Pipeline health, coverage, signals, and the latest research run.</p>
+      </div>
+      <div class="topbar-actions">
+        <span id="data-range" class="pill">Loading data…</span>
+        <button id="refresh-btn" class="ghost">Refresh</button>
+        <button id="pipeline-btn" class="primary">Rebuild analytics</button>
+      </div>
+    </header>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- ==================== OVERVIEW ==================== -->
+    <section class="tab active" id="tab-overview">
+      <div class="kpi-grid" id="overview-kpis"></div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Latest backtest</h2>
+            <button id="overview-open-backtest" class="ghost small">Open run</button>
+          </div>
+          <div id="overview-latest-backtest" class="loading">Loading</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Pipeline &amp; ingestion</h2>
+            <span class="panel-note">core analytics</span>
+          </div>
+          <div id="overview-pipeline" class="loading">Loading</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Universe coverage</h2>
+          <span id="overview-coverage-note" class="panel-note"></span>
+        </div>
+        <div id="overview-coverage" class="loading">Loading</div>
+      </div>
+    </section>
+
+    <!-- ==================== MARKET ==================== -->
+    <section class="tab" id="tab-market">
+      <p class="section-lead">Daily OHLCV from the cleaned research store. Charts and stats are computed from the selected window.</p>
+      <div class="toolbar">
+        <label class="field"><span>Symbol</span><select id="market-symbol"></select></label>
+        <div class="field">
+          <span>Window</span>
+          <div class="segmented" id="market-range">
+            <button data-range="1Y">1Y</button>
+            <button data-range="3Y" class="active">3Y</button>
+            <button data-range="5Y">5Y</button>
+            <button data-range="MAX">MAX</button>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <span id="market-asof" class="pill"></span>
+      </div>
+
+      <div class="kpi-grid" id="market-kpis"></div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Adjusted close</h2>
+          <span id="market-price-label" class="panel-note"></span>
+        </div>
+        <div class="chart-wrap"><canvas id="market-price-chart"></canvas></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Volume</h2><span class="panel-note">shares traded</span></div>
+        <div class="chart-wrap short"><canvas id="market-volume-chart"></canvas></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Recent sessions</h2><span class="panel-note">latest 30 rows</span></div>
+        <div id="market-table" class="loading">Loading</div>
+      </div>
+    </section>
+
+    <!-- ==================== FACTORS ==================== -->
+    <section class="tab" id="tab-factors">
+      <p class="section-lead">Cross-sectional factor exposures. Standardized values are clipped at the 1st/99th percentile before z-scoring, so they are comparable across dates.</p>
+      <div class="toolbar">
+        <label class="field"><span>Symbol</span><select id="factor-symbol"></select></label>
+        <label class="field grow"><span>Factor</span><select id="factor-name"></select></label>
+        <div class="spacer"></div>
+        <span id="factor-asof" class="pill"></span>
+      </div>
+
+      <div class="kpi-grid" id="factor-kpis"></div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2 id="factor-chart-title">Standardized factor</h2>
+          <span id="factor-description" class="panel-note"></span>
+        </div>
+        <div class="chart-wrap"><canvas id="factor-chart"></canvas></div>
+      </div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-head"><h2>Cross-sectional leaders</h2><span class="panel-note">highest exposure</span></div>
+          <div id="factor-leaders" class="loading">Loading</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Cross-sectional laggards</h2><span class="panel-note">lowest exposure</span></div>
+          <div id="factor-laggards" class="loading">Loading</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== SIGNALS ==================== -->
+    <section class="tab" id="tab-signals">
+      <p class="section-lead">Named weighted-factor signals. Scores are cross-sectional composites; the snapshot ranks the tradable universe on a chosen date.</p>
+      <div class="toolbar">
+        <label class="field grow"><span>Signal</span><select id="signal-name"></select></label>
+        <label class="field"><span>As of</span><input type="date" id="signal-date"></label>
+        <label class="field"><span>Rows per side</span>
+          <select id="signal-limit">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <span id="signal-coverage" class="pill"></span>
+      </div>
+
+      <div class="kpi-grid" id="signal-kpis"></div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-head"><h2>Long candidates</h2><span class="panel-note">highest scores</span></div>
+          <div id="signal-longs" class="loading">Loading</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Short candidates</h2><span class="panel-note">lowest scores</span></div>
+          <div id="signal-shorts" class="loading">Loading</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Score distribution</h2><span class="panel-note">cross-section histogram</span></div>
+        <div class="chart-wrap short"><canvas id="signal-hist-chart"></canvas></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Universe coverage</h2><span class="panel-note">scored names per session</span></div>
+        <div class="chart-wrap short"><canvas id="signal-history-chart"></canvas></div>
+      </div>
+    </section>
+
+    <!-- ==================== FORECAST ==================== -->
+    <section class="tab" id="tab-forecast">
+      <p class="section-lead">Multi-horizon up/down forecasts for 1 day, 1 week, 1 month, and 3 months. Qlib Alpha158 + LightGBM forecasts are blended with a deterministic native factor engine when available.</p>
+
+      <div class="toolbar">
+        <div class="field">
+          <span>Horizon</span>
+          <div class="segmented" id="fc-horizon">
+            <button data-horizon="1d">1D</button>
+            <button data-horizon="1w">1W</button>
+            <button data-horizon="1m" class="active">1M</button>
+            <button data-horizon="3m">3M</button>
+          </div>
+        </div>
+        <label class="field"><span>As of</span><input type="date" id="fc-date"></label>
+        <label class="field"><span>Min confidence</span>
+          <select id="fc-confidence">
+            <option value="0">Any</option>
+            <option value="0.55">55%</option>
+            <option value="0.65">65%</option>
+            <option value="0.75">75%</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <span id="fc-engine" class="pill"></span>
+        <button id="fc-rebuild" class="ghost">Rebuild forecasts</button>
+      </div>
+
+      <div class="kpi-grid" id="forecast-kpis"></div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-head"><h2>Up signals</h2><span class="panel-note">highest model score</span></div>
+          <div id="forecast-up" class="loading">Loading</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Down signals</h2><span class="panel-note">lowest model score</span></div>
+          <div id="forecast-down" class="loading">Loading</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Forecast board</h2>
+          <span id="forecast-board-note" class="panel-note"></span>
+        </div>
+        <div id="forecast-table" class="loading">Loading</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Symbol history</h2>
+          <div class="panel-actions">
+            <select id="fc-symbol"></select>
+          </div>
+        </div>
+        <div class="chart-wrap short"><canvas id="forecast-history-chart"></canvas></div>
+        <div id="forecast-symbol-note" class="panel-note"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Model &amp; artifacts</h2><span class="panel-note">engine status and calibration</span></div>
+        <div id="forecast-meta" class="loading">Loading</div>
+      </div>
+    </section>
+
+    <!-- ==================== STRATEGIES ==================== -->
+    <section class="tab" id="tab-strategies">
+      <p class="section-lead">Build, validate, preview, and run strategies. Definitions are persisted locally and every run is reproducible from its config and data snapshot.</p>
+
+      <div class="toolbar">
+        <label class="field grow"><span>Search</span><input id="strategy-search" type="search" placeholder="Name, tag, or category"></label>
+        <label class="field"><span>Category</span><select id="strategy-category"><option value="">All categories</option></select></label>
+        <label class="field"><span>Engine</span>
+          <select id="strategy-engine-filter">
+            <option value="">All engines</option>
+            <option value="native">Native</option>
+            <option value="auto">Auto</option>
+            <option value="qlib">Qlib</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <button id="strategy-new" class="primary">New strategy</button>
+      </div>
+
+      <div id="strategy-library" class="strategy-grid loading">Loading</div>
+
+      <div id="strategy-wizard" class="panel wizard hidden">
+        <div class="panel-head">
+          <h2 id="wizard-title">Strategy builder</h2>
+          <div class="panel-actions">
+            <span id="wizard-step-label" class="pill">Step 1 of 5</span>
+            <button id="wizard-close" class="ghost small" type="button">Close</button>
+          </div>
+        </div>
+
+        <div class="stepper" id="wizard-stepper">
+          <span class="stepper-item active" data-step="1">Identity</span>
+          <span class="stepper-item" data-step="2">Factors</span>
+          <span class="stepper-item" data-step="3">Portfolio</span>
+          <span class="stepper-item" data-step="4">Risk &amp; costs</span>
+          <span class="stepper-item" data-step="5">Review</span>
+        </div>
+
+        <form id="strategy-form">
+          <div class="wizard-step active" data-step="1">
+            <div class="form-grid">
+              <label class="field full"><span>Name</span><input id="sw-name" required maxlength="80" placeholder="e.g. Quality Momentum"></label>
+              <label class="field"><span>Strategy id</span><input id="sw-id" required pattern="[a-z0-9][a-z0-9_-]{1,63}" placeholder="quality_momentum"></label>
+              <label class="field"><span>Category</span><input id="sw-category" list="strategy-categories" maxlength="40" value="Custom"></label>
+              <datalist id="strategy-categories">
+                <option value="Momentum"></option>
+                <option value="Reversal"></option>
+                <option value="Defensive"></option>
+                <option value="Trend"></option>
+                <option value="Liquidity"></option>
+                <option value="Adaptive"></option>
+                <option value="Ensemble"></option>
+                <option value="Qlib"></option>
+                <option value="Custom"></option>
+              </datalist>
+              <label class="field"><span>Tags</span><input id="sw-tags" placeholder="momentum, core (comma separated)"></label>
+              <label class="field full"><span>Description</span><textarea id="sw-description" rows="3" maxlength="600" placeholder="What edge does this strategy exploit?"></textarea></label>
+              <label class="field"><span>Engine</span>
+                <select id="sw-engine">
+                  <option value="auto">Auto (Qlib → native fallback)</option>
+                  <option value="native">Native factors</option>
+                  <option value="qlib">Qlib model</option>
+                </select>
+              </label>
+              <label class="field"><span>Signal horizon</span>
+                <select id="sw-horizon">
+                  <option value="1d">1 day</option>
+                  <option value="1w">1 week</option>
+                  <option value="1m" selected>1 month</option>
+                  <option value="3m">3 months</option>
+                </select>
+              </label>
+              <label class="field"><span>Qlib blend weight</span><input id="sw-qlib-blend" type="number" min="0" max="1" step="0.05" value="0.7"></label>
+            </div>
+          </div>
+
+          <div class="wizard-step" data-step="2">
+            <div class="wizard-toolbar">
+              <label class="field"><span>Preset</span>
+                <select id="sw-preset">
+                  <option value="">Choose a starting point…</option>
+                  <option value="momentum">Momentum blend</option>
+                  <option value="reversal">Reversal blend</option>
+                  <option value="defensive">Defensive core</option>
+                  <option value="trend">Trend following</option>
+                  <option value="ensemble">Broad ensemble</option>
+                </select>
+              </label>
+              <div class="spacer"></div>
+              <button id="sw-add-factor" class="ghost small" type="button">Add factor</button>
+            </div>
+            <div id="wizard-factors" class="factor-weights"></div>
+            <p class="hint">Weights may be negative (a bearish tilt) and are normalized at runtime. At least one non-zero weight is required.</p>
+          </div>
+
+          <div class="wizard-step" data-step="3">
+            <div class="form-grid">
+              <div class="form-section-title full">Universe filters</div>
+              <label class="field"><span>Min price</span><input id="sw-min-price" type="number" min="0" step="0.5" value="1"></label>
+              <label class="field"><span>Min dollar volume</span><input id="sw-min-dollar" type="number" min="0" step="1000000" value="1000000"></label>
+              <label class="field"><span>Trend filter</span>
+                <select id="sw-trend">
+                  <option value="none">None</option>
+                  <option value="above_50">Above 50D average</option>
+                  <option value="above_200">Above 200D average</option>
+                  <option value="below_200">Below 200D average</option>
+                </select>
+              </label>
+              <label class="field"><span>Volatility filter</span>
+                <select id="sw-volatility">
+                  <option value="none">None</option>
+                  <option value="low">Below median vol</option>
+                  <option value="high">Above median vol</option>
+                </select>
+              </label>
+              <label class="field"><span>Min history (sessions)</span><input id="sw-min-history" type="number" min="20" max="2000" step="1" value="252"></label>
+              <div class="form-section-title full">Portfolio construction</div>
+              <label class="field"><span>Mode</span>
+                <select id="sw-mode">
+                  <option value="long_only">Long only</option>
+                  <option value="long_short">Long / short</option>
+                </select>
+              </label>
+              <label class="field"><span>Rebalance</span>
+                <select id="sw-frequency">
+                  <option value="daily">Daily</option>
+                  <option value="weekly" selected>Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </label>
+              <label class="field"><span>Quantile</span><input id="sw-quantile" type="number" min="0.01" max="1" step="0.01" value="0.2"></label>
+              <label class="field"><span>Max position weight</span><input id="sw-max-weight" type="number" min="0.01" max="1" step="0.01" value="0.1"></label>
+              <label class="field"><span>Gross exposure</span><input id="sw-gross" type="number" min="0.05" max="2" step="0.05" value="1"></label>
+              <label class="field"><span>Long fraction</span><input id="sw-long-fraction" type="number" min="0.05" max="0.95" step="0.05" value="0.5"></label>
+            </div>
+          </div>
+
+          <div class="wizard-step" data-step="4">
+            <div class="form-grid">
+              <div class="form-section-title full">Risk overlays</div>
+              <label class="field"><span>Target volatility (annual)</span><input id="sw-target-vol" type="number" min="0.01" max="1.5" step="0.01" placeholder="off"></label>
+              <label class="field"><span>Max gross exposure</span><input id="sw-max-gross" type="number" min="0.05" max="2" step="0.05" value="1"></label>
+              <label class="field"><span>Drawdown stop</span><input id="sw-drawdown-stop" type="number" min="0.01" max="0.95" step="0.01" placeholder="off"></label>
+              <label class="field"><span>Drawdown resume</span><input id="sw-drawdown-resume" type="number" min="0" max="0.95" step="0.01" placeholder="half of stop"></label>
+              <div class="form-section-title full">Transaction costs</div>
+              <label class="field"><span>Commission bps</span><input id="sw-commission" type="number" min="0" step="0.1" value="1"></label>
+              <label class="field"><span>Slippage bps</span><input id="sw-slippage" type="number" min="0" step="0.1" value="2"></label>
+              <label class="field"><span>Borrow bps / year</span><input id="sw-borrow" type="number" min="0" step="1" value="50"></label>
+            </div>
+          </div>
+
+          <div class="wizard-step" data-step="5">
+            <div id="wizard-validation" class="validation-box">Save or validate to see coverage and warnings.</div>
+            <div id="wizard-summary" class="summary-grid"></div>
+            <div class="wizard-run">
+              <label class="field"><span>Backtest start</span><input id="sw-start" type="date"></label>
+              <label class="field"><span>Backtest end</span><input id="sw-end" type="date"></label>
+              <label class="field"><span>Split date</span><input id="sw-split" type="date"></label>
+            </div>
+            <div id="strategy-preview" class="strategy-preview"></div>
+          </div>
+
+          <div class="wizard-actions">
+            <button id="wizard-back" class="ghost" type="button">Back</button>
+            <div class="spacer"></div>
+            <button id="wizard-validate" class="ghost" type="button">Validate</button>
+            <button id="wizard-preview" class="ghost" type="button">Preview signals</button>
+            <button id="wizard-next" class="primary" type="button">Next</button>
+            <button id="wizard-save" class="primary hidden" type="submit">Save strategy</button>
+          </div>
+        </form>
+        <div id="strategy-run-status" class="job-status"></div>
+      </div>
+    </section>
+
+    <!-- ==================== BACKTEST ==================== -->
+    <section class="tab" id="tab-backtest">
+      <p class="section-lead">Long-only or long/short portfolio simulation with capped equal weights, weekly/monthly rebalancing, costs, and SPY/equal-weight benchmarks.</p>
+
+      <div class="grid backtest-layout">
+        <div class="panel">
+          <div class="panel-head"><h2>Configuration</h2><span class="panel-note">POST /backtests</span></div>
+          <form id="backtest-form">
+            <div class="form-grid">
+              <label class="field full"><span>Signal</span><select id="bt-signal"></select></label>
+              <label class="field"><span>Mode</span>
+                <select id="bt-mode">
+                  <option value="long_only">Long only</option>
+                  <option value="long_short">Long / short</option>
+                </select>
+              </label>
+              <label class="field"><span>Rebalance</span>
+                <select id="bt-frequency">
+                  <option value="daily">Daily</option>
+                  <option value="weekly" selected>Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </label>
+              <label class="field"><span>Quantile</span><input id="bt-quantile" type="number" min="0.01" max="1" step="0.01" value="0.1"></label>
+              <label class="field"><span>Max weight</span><input id="bt-max-weight" type="number" min="0.01" max="1" step="0.01" value="0.25"></label>
+              <div class="form-section-title full">Transaction costs</div>
+              <label class="field"><span>Commission bps</span><input id="bt-commission" type="number" min="0" step="0.1" value="1"></label>
+              <label class="field"><span>Slippage bps</span><input id="bt-slippage" type="number" min="0" step="0.1" value="2"></label>
+              <label class="field"><span>Borrow bps / yr</span><input id="bt-borrow" type="number" min="0" step="1" value="50"></label>
+              <div class="form-section-title full">Date range (optional)</div>
+              <label class="field"><span>Start</span><input id="bt-start" type="date"></label>
+              <label class="field"><span>End</span><input id="bt-end" type="date"></label>
+              <label class="field full"><span>Split date (in / out of sample)</span><input id="bt-split" type="date"></label>
+            </div>
+            <button type="submit" id="bt-submit" class="primary wide">Run backtest</button>
+          </form>
+          <div id="backtest-job" class="job-status"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Results</h2>
+            <span id="backtest-run-meta" class="panel-note">No run loaded</span>
+          </div>
+          <div id="backtest-kpis" class="kpi-grid compact"></div>
+
+          <h3>Equity curve</h3>
+          <div class="chart-wrap"><canvas id="equity-chart"></canvas></div>
+
+          <div class="grid two">
+            <div>
+              <h3>Drawdown</h3>
+              <div class="chart-wrap short"><canvas id="drawdown-chart"></canvas></div>
+            </div>
+            <div>
+              <h3>Gross exposure</h3>
+              <div class="chart-wrap short"><canvas id="exposure-chart"></canvas></div>
+            </div>
+          </div>
+
+          <h3>Metrics</h3>
+          <div id="backtest-metrics"></div>
+
+          <h3>Signal diagnostics</h3>
+          <div class="grid two">
+            <div class="chart-wrap short"><canvas id="ic-chart"></canvas></div>
+            <div id="ic-summary"></div>
+          </div>
+
+          <h3>Latest positions</h3>
+          <div id="backtest-positions"></div>
+
+          <h3>Reproducibility</h3>
+          <div id="backtest-repro"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Run history</h2>
+          <button id="reload-runs" class="ghost small">Reload</button>
+        </div>
+        <div id="backtest-runs" class="loading">Loading</div>
+      </div>
+    </section>
+
+    <!-- ==================== HEALTH ==================== -->
+    <section class="tab" id="tab-health">
+      <p class="section-lead">Quality controls run before factors and signals. Error-level rows are excluded from clean_prices; warnings are retained for review.</p>
+      <div class="kpi-grid" id="health-kpis"></div>
+
+      <div class="toolbar">
+        <label class="field"><span>Issue severity</span>
+          <select id="issue-severity">
+            <option value="">All severities</option>
+            <option value="error">Errors</option>
+            <option value="warn">Warnings</option>
+          </select>
+        </label>
+        <div class="spacer"></div>
+        <button id="reload-health" class="ghost">Reload health</button>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Symbol quality</h2><span class="panel-note">expected vs. observed sessions</span></div>
+        <div id="health-summary" class="loading">Loading</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Quality issues</h2><span id="health-issue-note" class="panel-note"></span></div>
+        <div id="health-issues" class="loading">Loading</div>
+      </div>
+
+      <div class="grid two">
+        <div class="panel">
+          <div class="panel-head"><h2>Ingestion runs</h2><span class="panel-note">raw vendor pulls</span></div>
+          <div id="health-ingest" class="loading">Loading</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Pipeline runs</h2><span class="panel-note">qc → factors → signal</span></div>
+          <div id="health-pipeline" class="loading">Loading</div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+  <div class="modal-card">
+    <h2 id="settings-title">API key</h2>
+    <p>If the API was started with <span class="mono">API_KEY</span>, enter it here. It is stored only in this browser's local storage.</p>
+    <label class="field">
+      <span>X-API-Key</span>
+      <input id="api-key-input" type="password" autocomplete="off" placeholder="optional">
+    </label>
+    <div class="modal-actions">
+      <button id="api-key-clear" class="ghost" type="button">Clear</button>
+      <button id="api-key-cancel" class="ghost" type="button">Cancel</button>
+      <button id="api-key-save" class="primary" type="button">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/charts.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/research.js"></script>
+<script src="/static/forecast.js"></script>
+<script src="/static/strategies.js"></script>
+<script src="/static/backtest.js"></script>
 </body>
 </html>

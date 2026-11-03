@@ -12,6 +12,8 @@ signal:
         distance_high: 0.1
         dollar_volume: 0.2
       liquidity_min_dollar_volume: 10000000
+directions:
+  engine: auto
 backtest:
   rebalance_frequency: weekly
   max_position_weight: 0.25
@@ -19,3 +21,6 @@ backtest:
   slippage_bps: 2.0
   borrow_bps: 50.0
   delisting_return: -1.0
+  gross_exposure: 1.0
+  long_fraction: 0.5
+  max_gross_exposure: 1.0

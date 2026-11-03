@@ -1,0 +1,7 @@
+# Optional Qlib forecasting stack. Install after services/core/requirements.txt:
+#   make qlib
+# or:
+#   WITH_QLIB=1 make setup
+# The API and dashboard fall back to native factor forecasts when Qlib is absent.
+pyqlib==0.9.7
+lightgbm==4.7.0

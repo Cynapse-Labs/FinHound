@@ -217,7 +217,12 @@ marimo/_lsp/
 __marimo__/
 data/*
 !data/.gitkeep
+data.backup-*/
 .venv-*/
+
+# Qlib / MLflow local artifacts
+mlruns/
+home/
 
 # Streamlit
 .streamlit/secrets.toml

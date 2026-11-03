@@ -98,10 +98,18 @@ def build_target_weights(
     cap: float,
     mode: str,
     frequency: str,
+    gross_exposure: float = 1.0,
+    long_fraction: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.Series]:
     signal_p = signal.reindex(columns=tradable)
     weights = pd.DataFrame(np.nan, index=signal.index, columns=tradable, dtype=float)
     rebalance = rebalance_dates(signal.index, frequency)
+    if mode == "long_short":
+        long_gross = gross_exposure * long_fraction
+        short_gross = gross_exposure * (1 - long_fraction)
+    else:
+        long_gross = gross_exposure
+        short_gross = 0.0
     for day in signal.index[rebalance]:
         valid = signal_p.loc[day].dropna()
         if valid.empty:
@@ -112,11 +120,11 @@ def build_target_weights(
         if mode == "long_short":
             winners = valid.nlargest(n).index
             losers = valid.nsmallest(n).index
-            weights.loc[day, winners] = capped_equal_weights(winners, 0.5, cap)
-            weights.loc[day, losers] = capped_equal_weights(losers, 0.5, cap, -1.0)
+            weights.loc[day, winners] = capped_equal_weights(winners, long_gross, cap)
+            weights.loc[day, losers] = capped_equal_weights(losers, short_gross, cap, -1.0)
         else:
             winners = valid.nlargest(n).index
-            weights.loc[day, winners] = capped_equal_weights(winners, 1.0, cap)
+            weights.loc[day, winners] = capped_equal_weights(winners, long_gross, cap)
             weights.loc[day, weights.columns.difference(winners)] = 0.0
     weights = weights.ffill().fillna(0.0)
     turnover = weights.diff().abs().sum(axis=1)
@@ -124,11 +132,100 @@ def build_target_weights(
     return weights, turnover
 
 
+def apply_risk_overlays(
+    weights: pd.DataFrame,
+    returns: pd.DataFrame,
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Apply causal volatility targeting and a drawdown circuit breaker."""
+    if weights.empty:
+        return weights, {"volatility_scale_min": 1.0, "volatility_scale_max": 1.0, "drawdown_halts": 0}
+    executed = weights.shift(1).fillna(0.0)
+    gross = (executed * returns).sum(axis=1)
+    target = config.get("target_volatility")
+    scale_min = 1.0
+    scale_max = 1.0
+    if target:
+        trailing = gross.rolling(63, min_periods=20).std() * np.sqrt(252)
+        scale = (float(target) / trailing.replace(0, np.nan)).shift(1).clip(0.1, 2.0).fillna(1.0)
+        scale_min = float(scale.min())
+        scale_max = float(scale.max())
+        executed = executed.mul(scale, axis=0)
+    max_gross = float(config.get("max_gross_exposure") or 1.0)
+    gross_now = executed.abs().sum(axis=1)
+    excess = gross_now > max_gross
+    if excess.any():
+        executed.loc[excess] = executed.loc[excess].mul(max_gross / gross_now.loc[excess], axis=0)
+    stop = config.get("drawdown_stop")
+    halts = 0
+    if stop:
+        stop = float(stop)
+        resume = float(config.get("drawdown_resume") or stop * 0.5)
+        active = True
+        equity = 1.0
+        peak = 1.0
+        active_series = []
+        for day in executed.index:
+            day_return = float((executed.loc[day] * returns.loc[day]).sum())
+            if not active:
+                day_return = 0.0
+            equity *= 1 + day_return
+            peak = max(peak, equity)
+            drawdown = equity / peak - 1
+            active_series.append(1.0 if active else 0.0)
+            if active and drawdown <= -stop:
+                active = False
+                halts += 1
+            elif not active and drawdown >= -resume:
+                active = True
+        executed = executed.mul(pd.Series(active_series, index=executed.index), axis=0)
+    final_turnover = executed.diff().abs().sum(axis=1)
+    if len(final_turnover):
+        final_turnover.iloc[0] = executed.iloc[0].abs().sum()
+    diagnostics = {
+        "volatility_scale_min": round(scale_min, 4),
+        "volatility_scale_max": round(scale_max, 4),
+        "drawdown_halts": halts,
+        "max_gross_exposure_observed": float(executed.abs().sum(axis=1).max()),
+        "turnover": final_turnover,
+    }
+    return executed, diagnostics
+
+
 def forward_returns(close: pd.DataFrame, horizon: int) -> pd.DataFrame:
     """Return from the first close after signal date through horizon sessions."""
     if horizon < 1:
         raise ValueError("horizon must be positive")
     return close.shift(-(horizon + 1)).div(close.shift(-1)).sub(1)
+
+
+def apply_terminal_returns(
+    returns: pd.DataFrame,
+    close: pd.DataFrame,
+    terminal_return: float,
+    grace_days: int = 30,
+) -> pd.DataFrame:
+    """Stamp a delisting return only when a symbol stops trading well before the panel.
+
+    Vendor feeds often return a placeholder row with a null close for the current
+    session. Treating that row as the panel end used to mark every symbol as
+    delisted and drive every backtest to -100%. Ignore all-null panel rows and
+    require a real gap before applying the terminal return.
+    """
+    if returns.empty or close.empty:
+        return returns
+    valid_rows = close.notna().any(axis=1)
+    if not valid_rows.any():
+        return returns
+    panel_last_date = close.index[valid_rows][-1]
+    for symbol in close.columns:
+        valid_dates = close[symbol].dropna().index
+        if not len(valid_dates):
+            continue
+        gap = pd.Timestamp(panel_last_date) - pd.Timestamp(valid_dates[-1])
+        if gap.days > grace_days:
+            returns.loc[valid_dates[-1], symbol] = terminal_return
+    return returns
 
 
 def signal_diagnostics(
@@ -180,22 +277,33 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     signal = signal.copy()
     signal["date"] = pd.to_datetime(signal.date).dt.date
     close = prices.pivot(index="date", columns="symbol", values="close").sort_index()
+    close = close.loc[close.notna().any(axis=1)]
     if config.get("start_date"):
         close = close.loc[close.index >= pd.Timestamp(config["start_date"]).date()]
     if config.get("end_date"):
         close = close.loc[close.index <= pd.Timestamp(config["end_date"]).date()]
-    signal_p = signal.pivot(index="date", columns="symbol", values="score").reindex(close.index)
-    membership = store.query("SELECT DISTINCT symbol FROM universe_membership WHERE tradable = true")
+    signal_p = signal.pivot(index="date", columns="symbol", values="score").reindex(index=close.index, columns=close.columns)
+    log.info(
+        "backtest_data_loaded",
+        price_rows=len(prices),
+        signal_rows=len(signal),
+        sessions=len(close),
+        symbols=len(close.columns),
+    )
+    membership = store.query("SELECT symbol, start_date, end_date FROM universe_membership WHERE tradable = true")
     tradable = membership["symbol"].tolist() if not membership.empty else [c for c in close.columns if c != "SPY"]
     tradable = [symbol for symbol in tradable if symbol in close.columns]
-    if not membership.empty:
-        for day in signal_p.index:
-            active = store.query(
-                "SELECT symbol FROM universe_membership WHERE tradable = true "
-                "AND start_date <= ? AND (end_date IS NULL OR end_date >= ?)",
-                [day, day],
-            )["symbol"].tolist()
-            signal_p.loc[day, [s for s in tradable if s not in active]] = np.nan
+    if not membership.empty and tradable:
+        calendar_index = pd.DatetimeIndex(signal_p.index)
+        active = pd.DataFrame(False, index=signal_p.index, columns=tradable)
+        for row in membership.itertuples(index=False):
+            if row.symbol not in active.columns:
+                continue
+            mask = calendar_index >= pd.Timestamp(row.start_date)
+            if row.end_date is not None and not pd.isna(row.end_date):
+                mask &= calendar_index <= pd.Timestamp(row.end_date)
+            active.loc[mask, row.symbol] = True
+        signal_p[tradable] = signal_p[tradable].where(active)
     weights, turnover = build_target_weights(
         signal_p[tradable],
         tradable,
@@ -203,17 +311,18 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         float(config.get("max_position_weight", 0.25)),
         config.get("mode", "long_only"),
         config.get("rebalance_frequency", "weekly"),
+        gross_exposure=float(config.get("gross_exposure", 1.0)),
+        long_fraction=float(config.get("long_fraction", 0.5)),
     )
-    executed = weights.shift(1).fillna(0.0)
+    log.info("backtest_weights_ready", tradable=len(tradable), average_gross=float(weights.abs().sum(axis=1).mean()))
     returns = close.pct_change().shift(-1)
     terminal_return = float(config.get("delisting_return", -1.0))
-    for symbol in close.columns:
-        valid_dates = close[symbol].dropna().index
-        if len(valid_dates):
-            returns.loc[valid_dates[-1], symbol] = terminal_return
+    grace_days = int(config.get("delisting_grace_days", 30))
+    returns = apply_terminal_returns(returns, close, terminal_return, grace_days)
     returns = returns.fillna(0.0)
+    executed, overlay = apply_risk_overlays(weights, returns, config)
+    traded_turnover = overlay.pop("turnover", turnover.shift(1).fillna(0.0))
     gross = (executed * returns).sum(axis=1)
-    traded_turnover = turnover.shift(1).fillna(0.0)
     short = executed.clip(upper=0).abs().sum(axis=1)
     net = apply_costs(
         traded_turnover,
@@ -240,6 +349,7 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         }
     )
     diagnostics, research = signal_diagnostics(signal_p[tradable], close[tradable])
+    log.info("backtest_diagnostics_ready", research_rows=len(research))
     run_id = store.new_run_id()
     split = config.get("split_date")
     in_sample = net.loc[net.index < pd.Timestamp(split).date()] if split else net
@@ -251,6 +361,7 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         "average_holdings": float((executed != 0).sum(axis=1).mean()),
         "average_gross_exposure": float(gross_exposure.mean()),
         "annual_turnover": float(traded_turnover.mean() * 252),
+        "risk_overlay": overlay,
         **diagnostics,
     }
     result["reproducibility"] = store.reproducibility_metadata(config)
@@ -263,4 +374,5 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         research,
         result["reproducibility"],
     )
+    log.info("backtest_saved", run_id=run_id, positions_rows=len(executed) * len(executed.columns))
     return run_id, result
