@@ -6,7 +6,7 @@ fastapi==0.120.3
 uvicorn==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.0
-pandas-market-calendars==4.4.2
+pandas-market-calendars==5.5.0
 PyYAML==6.0.2
 structlog==24.4.0
 pytest==8.3.4
