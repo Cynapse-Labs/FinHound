@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .analytics import drawdown_episodes, performance_metrics, rolling_risk
 from .backtest import run_backtest
 from .directions import (
     HORIZONS as DIRECTION_HORIZONS,
@@ -33,7 +34,7 @@ from .directions import (
     snapshot as directions_snapshot,
 )
 from .factors import compute_factors, factor_catalog
-from .gamma import gamma_exposure
+from .gamma import gamma_exposure, gamma_heatmap
 from .qc import run_qc
 from .qlib_engine import engine_status
 from .qlib_engine import reset as reset_qlib
@@ -362,6 +363,10 @@ class GammaExposureRequest(BaseModel):
     options: list[OptionGammaRow] = Field(min_length=1, max_length=100000)
 
 
+class GammaHeatmapRequest(GammaExposureRequest):
+    pass
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     data: dict[str, Any] = {}
@@ -433,6 +438,16 @@ def options_gamma_exposure(body: GammaExposureRequest) -> dict[str, Any]:
     frame = pd.DataFrame([row.model_dump() for row in body.options])
     try:
         return gamma_exposure(frame, spot=body.spot, symbol=body.symbol)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/options/gamma-heatmap")
+def options_gamma_heatmap(body: GammaHeatmapRequest) -> dict[str, Any]:
+    """Return expiration/strike gamma cells for heat-map rendering."""
+    frame = pd.DataFrame([row.model_dump() for row in body.options])
+    try:
+        return gamma_heatmap(frame, spot=body.spot, symbol=body.symbol)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1146,6 +1161,43 @@ def equity(run_id: str) -> list[dict[str, Any]]:
     if not path.exists():
         raise HTTPException(404, "backtest not found")
     return _records(pd.read_parquet(path))
+
+
+@app.get("/backtests/{run_id}/risk")
+def backtest_risk(
+    run_id: str,
+    window: Annotated[int, Query(ge=2, le=756)] = 63,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+) -> dict[str, Any]:
+    """Return aggregate, rolling, and drawdown risk diagnostics for a run."""
+    path = store.root / "results" / run_id / "equity.parquet"
+    if not path.exists():
+        raise HTTPException(404, "backtest equity not found")
+    frame = pd.read_parquet(path)
+    required = {"date", "daily_return"}
+    if not required.issubset(frame.columns):
+        raise HTTPException(422, "backtest equity is missing required return columns")
+    returns = pd.Series(
+        pd.to_numeric(frame["daily_return"], errors="coerce").to_numpy(),
+        index=pd.to_datetime(frame["date"]),
+        name="strategy",
+    )
+    benchmark = None
+    if "SPY" in frame.columns:
+        benchmark = pd.Series(
+            pd.to_numeric(frame["SPY"], errors="coerce").pct_change().to_numpy(),
+            index=pd.to_datetime(frame["date"]),
+            name="SPY",
+        )
+    episodes = drawdown_episodes(returns).head(limit)
+    rolling = rolling_risk(returns, window=window, benchmark=benchmark).tail(limit)
+    return {
+        "run_id": run_id,
+        "window": window,
+        "summary": performance_metrics(returns, benchmark=benchmark),
+        "drawdowns": _records(episodes),
+        "rolling": _records(rolling),
+    }
 
 
 @app.get("/backtests/{run_id}/research")

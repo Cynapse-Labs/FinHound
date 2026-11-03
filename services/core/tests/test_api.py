@@ -81,6 +81,31 @@ def test_health_metrics_and_engines(client: TestClient) -> None:
     assert "directions" in engines.json()
 
 
+def test_backtest_risk_report(client: TestClient, store) -> None:
+    import pandas as pd
+
+    run_id = "risk-report-test"
+    path = store.root / "results" / run_id
+    path.mkdir(parents=True, exist_ok=True)
+    dates = pd.bdate_range("2024-01-02", periods=8)
+    strategy = pd.Series([0.01, 0.02, -0.01, 0.01, 0.02, -0.01, 0.01, 0.02])
+    spy = pd.Series([0.005, 0.01, -0.005, 0.005, 0.01, -0.005, 0.005, 0.01])
+    pd.DataFrame(
+        {
+            "date": dates,
+            "daily_return": strategy,
+            "SPY": (1 + spy).cumprod(),
+        }
+    ).to_parquet(path / "equity.parquet", index=False)
+
+    response = client.get(f"/backtests/{run_id}/risk?window=3")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == run_id
+    assert body["summary"]["benchmark_beta"] == pytest.approx(2.0)
+    assert body["rolling"]
+
+
 def test_factor_catalog_contract(client: TestClient) -> None:
     response = client.get("/factors/catalog")
     assert response.status_code == 200
@@ -106,6 +131,23 @@ def test_gamma_exposure_endpoint(client: TestClient) -> None:
     assert body["symbol"] == "SPY"
     assert body["net_gamma_exposure"] == pytest.approx(0)
     assert len(body["strikes"]) == 2
+
+
+def test_gamma_heatmap_endpoint(client: TestClient) -> None:
+    response = client.post(
+        "/options/gamma-heatmap",
+        json={
+            "symbol": "SPY",
+            "options": [
+                {"expiration": "2024-01-19", "strike": 95, "option_type": "call", "gamma": 0.02, "open_interest": 100, "spot": 100},
+                {"expiration": "2024-02-16", "strike": 105, "option_type": "put", "gamma": 0.02, "open_interest": 100, "spot": 100},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["expirations"] == ["2024-01-19", "2024-02-16"]
+    assert len(body["cells"]) == 2
 
 
 def test_signal_snapshot_contract(client: TestClient, store) -> None:

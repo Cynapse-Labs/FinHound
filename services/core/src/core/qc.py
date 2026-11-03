@@ -9,6 +9,8 @@ import pandas_market_calendars as mcal
 from .store import Store
 
 ISSUE_COLUMNS = ["date", "symbol", "check_name", "severity", "detail"]
+MIN_LAST_VOLUME = 5_000
+MIN_LAST_PRICE = 1.0
 
 
 def _issue_frame(prices: pd.DataFrame, mask: pd.Series, check_name: str, severity: str, detail: str) -> pd.DataFrame:
@@ -146,6 +148,10 @@ def run_qc(store: Store, frame: pd.DataFrame | None = None, today: date | None =
         bad_keys = pd.MultiIndex.from_frame(errors[["symbol", "date"]])
         price_keys = pd.MultiIndex.from_frame(prices[["symbol", "date"]])
         clean = prices.loc[~price_keys.isin(bad_keys)]
+    clean, eligibility_issues = apply_latest_session_eligibility(clean)
+    if not eligibility_issues.empty:
+        issue_frame = pd.concat([issue_frame, eligibility_issues], ignore_index=True)
+        store.write_table(issue_frame, "qc_issues")
     store.write_table(clean.drop_duplicates(["symbol", "date"]), "clean_prices")
 
     grouped = prices.groupby("symbol")
@@ -179,3 +185,40 @@ def run_qc(store: Store, frame: pd.DataFrame | None = None, today: date | None =
         "qc_summary",
     )
     return issue_frame
+
+
+def apply_latest_session_eligibility(
+    prices: pd.DataFrame,
+    *,
+    min_volume: int = MIN_LAST_VOLUME,
+    min_price: float = MIN_LAST_PRICE,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Keep complete symbol histories only for names eligible on the latest session."""
+    if prices.empty:
+        return prices, pd.DataFrame(columns=ISSUE_COLUMNS)
+    if min_volume < 0 or min_price <= 0:
+        raise ValueError("minimum volume must be non-negative and minimum price must be positive")
+    frame = prices.copy()
+    frame["date"] = pd.to_datetime(frame["date"]).dt.date
+    latest = frame["date"].max()
+    snapshot = frame.loc[frame["date"] == latest].copy()
+    volume = pd.to_numeric(snapshot.get("volume"), errors="coerce")
+    close = pd.to_numeric(snapshot.get("close"), errors="coerce")
+    eligible = snapshot.loc[volume.ge(min_volume) & close.ge(min_price), "symbol"].astype(str)
+    excluded = sorted(set(frame["symbol"].astype(str)) - set(eligible))
+    if not excluded:
+        return frame, pd.DataFrame(columns=ISSUE_COLUMNS)
+    issues = pd.DataFrame(
+        [
+            {
+                "date": latest,
+                "symbol": symbol,
+                "check_name": "latest_session_eligibility",
+                "severity": "error",
+                "detail": f"requires close >= {min_price:g} and volume >= {min_volume}",
+            }
+            for symbol in excluded
+        ],
+        columns=ISSUE_COLUMNS,
+    )
+    return frame.loc[frame["symbol"].astype(str).isin(eligible)].copy(), issues
