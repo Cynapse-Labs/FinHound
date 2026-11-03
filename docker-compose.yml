@@ -1,0 +1,15 @@
+services:
+  ingest:
+    build: ./services/ingest
+    volumes:
+      - ./data:/data
+      - ./config:/config:ro
+    command: ["python", "-m", "ingest"]
+  core:
+    build: ./services/core
+    volumes:
+      - ./data:/data
+      - ./config:/config:ro
+    ports:
+      - "8000:8000"
+    command: ["uvicorn", "core.api:app", "--host", "0.0.0.0", "--port", "8000"]

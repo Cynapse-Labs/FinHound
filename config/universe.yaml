@@ -1,0 +1,52 @@
+start_date: "2015-01-01"
+symbols:
+  - {symbol: AAPL, sector: Technology, tradable: true}
+  - {symbol: MSFT, sector: Technology, tradable: true}
+  - {symbol: NVDA, sector: Technology, tradable: true}
+  - {symbol: AMZN, sector: Consumer Discretionary, tradable: true}
+  - {symbol: META, sector: Communication Services, tradable: true}
+  - {symbol: GOOGL, sector: Communication Services, tradable: true}
+  - {symbol: AVGO, sector: Technology, tradable: true}
+  - {symbol: ORCL, sector: Technology, tradable: true}
+  - {symbol: ADBE, sector: Technology, tradable: true}
+  - {symbol: CRM, sector: Technology, tradable: true}
+  - {symbol: JPM, sector: Financials, tradable: true}
+  - {symbol: BAC, sector: Financials, tradable: true}
+  - {symbol: WFC, sector: Financials, tradable: true}
+  - {symbol: GS, sector: Financials, tradable: true}
+  - {symbol: MS, sector: Financials, tradable: true}
+  - {symbol: V, sector: Financials, tradable: true}
+  - {symbol: MA, sector: Financials, tradable: true}
+  - {symbol: BRK-B, sector: Financials, tradable: true}
+  - {symbol: UNH, sector: Health Care, tradable: true}
+  - {symbol: JNJ, sector: Health Care, tradable: true}
+  - {symbol: LLY, sector: Health Care, tradable: true}
+  - {symbol: PFE, sector: Health Care, tradable: true}
+  - {symbol: ABBV, sector: Health Care, tradable: true}
+  - {symbol: MRK, sector: Health Care, tradable: true}
+  - {symbol: TMO, sector: Health Care, tradable: true}
+  - {symbol: XOM, sector: Energy, tradable: true}
+  - {symbol: CVX, sector: Energy, tradable: true}
+  - {symbol: COP, sector: Energy, tradable: true}
+  - {symbol: CAT, sector: Industrials, tradable: true}
+  - {symbol: DE, sector: Industrials, tradable: true}
+  - {symbol: GE, sector: Industrials, tradable: true}
+  - {symbol: HON, sector: Industrials, tradable: true}
+  - {symbol: UPS, sector: Industrials, tradable: true}
+  - {symbol: HD, sector: Consumer Discretionary, tradable: true}
+  - {symbol: MCD, sector: Consumer Discretionary, tradable: true}
+  - {symbol: NKE, sector: Consumer Discretionary, tradable: true}
+  - {symbol: WMT, sector: Consumer Staples, tradable: true}
+  - {symbol: COST, sector: Consumer Staples, tradable: true}
+  - {symbol: PG, sector: Consumer Staples, tradable: true}
+  - {symbol: KO, sector: Consumer Staples, tradable: true}
+  - {symbol: PEP, sector: Consumer Staples, tradable: true}
+  - {symbol: DIS, sector: Communication Services, tradable: true}
+  - {symbol: NFLX, sector: Communication Services, tradable: true}
+  - {symbol: CMCSA, sector: Communication Services, tradable: true}
+  - {symbol: LIN, sector: Materials, tradable: true}
+  - {symbol: NEE, sector: Utilities, tradable: true}
+  - {symbol: DUK, sector: Utilities, tradable: true}
+  - {symbol: PLD, sector: Real Estate, tradable: true}
+  - {symbol: AMT, sector: Real Estate, tradable: true}
+  - {symbol: SPY, sector: ETF, tradable: false}

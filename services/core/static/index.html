@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>QuantPlatform</title><style>
+body{font-family:system-ui;margin:2rem;background:#fff;color:#222} @media(prefers-color-scheme:dark){body{background:#121212;color:#eee}}
+nav button{margin:.25rem;padding:.5rem} table{border-collapse:collapse}td,th{padding:.35rem;border:1px solid #888}
+</style></head><body><h1>QuantPlatform</h1><nav>
+<button onclick="load('health')">Data Health</button><button onclick="load('factors')">Factors</button>
+<button onclick="load('signals')">Signal Research</button><button onclick="load('backtests')">Backtest</button></nav>
+<pre id="output">Loading...</pre><script>
+async function load(tab){const urls={health:'/qc/summary',factors:'/factors/AAPL',signals:'/signals',backtests:'/backtests'};
+const r=await fetch(urls[tab]);document.querySelector('#output').textContent=JSON.stringify(await r.json(),null,2)}
+load('health');
+</script></body></html>
