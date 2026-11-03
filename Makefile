@@ -1,5 +1,7 @@
 PYTHON ?= python3
 all: ingest qc factors signal backtest
+run:
+	PYTHONPATH=services/core/src DATA_ROOT=data SETTINGS_PATH=config/settings.yaml $(PYTHON) -m core.pipeline all
 build:
 	docker compose build
 up:
@@ -16,6 +18,6 @@ signal:
 backtest:
 	PYTHONPATH=services/core/src DATA_ROOT=data SETTINGS_PATH=config/settings.yaml $(PYTHON) -m core.pipeline backtest
 test:
-	pytest -q
+	PYTHONPATH=services/core/src:services/ingest/src $(PYTHON) -m pytest -q
 lint:
-	ruff check . && ruff format --check .
+	$(PYTHON) -m ruff check services pyproject.toml && $(PYTHON) -m ruff format --check services pyproject.toml

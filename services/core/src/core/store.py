@@ -1,22 +1,27 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.metadata
 import json
 import os
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pandas as pd
+import yaml
 
 
 class Store:
-    def __init__(self, root: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path | None = None, read_only: bool = False) -> None:
         root = root or os.getenv("DATA_ROOT", "/data")
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.db = duckdb.connect(str(self.root / "store.duckdb"))
-        self.init_schema()
+        self.db = duckdb.connect(str(self.root / "store.duckdb"), read_only=read_only)
+        if not read_only:
+            self.init_schema()
 
     def init_schema(self) -> None:
         self.db.execute(
@@ -36,8 +41,55 @@ class Store:
               PRIMARY KEY(date, symbol, factor));
             CREATE TABLE IF NOT EXISTS backtest_runs(run_id VARCHAR PRIMARY KEY, created_at TIMESTAMP, config VARCHAR,
               metrics VARCHAR);
+            CREATE TABLE IF NOT EXISTS universe_membership(
+              symbol VARCHAR, start_date DATE, end_date DATE, index_name VARCHAR, tradable BOOLEAN
+            );
             """
         )
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info('backtest_runs')").fetchall()}
+        for name in ("git_sha", "config_hash", "data_snapshot", "library_versions"):
+            if name not in columns:
+                self.db.execute(f"ALTER TABLE backtest_runs ADD COLUMN {name} VARCHAR")
+        self._load_static_universe()
+
+    def _load_static_universe(self) -> None:
+        config_path = Path(os.getenv("UNIVERSE_PATH", "/config/universe.yaml"))
+        if self.db.execute("SELECT count(*) FROM universe_membership").fetchone()[0] or not config_path.exists():
+            return
+        config = yaml.safe_load(config_path.read_text())
+        rows = [
+            {
+                "symbol": item["symbol"],
+                "start_date": config.get("start_date", "1900-01-01"),
+                "end_date": None,
+                "index_name": "static_current_constituents",
+                "tradable": bool(item.get("tradable", True)),
+            }
+            for item in config["symbols"]
+        ]
+        self.write_table(pd.DataFrame(rows), "universe_membership")
+
+    def reproducibility_metadata(self, config: dict[str, Any]) -> dict[str, str]:
+        try:
+            git_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=self.root.parent, text=True, stderr=subprocess.DEVNULL
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            git_sha = "unknown"
+        clean = self.query("SELECT count(*) AS rows, max(fetched_at) AS max_fetched_at, max(date) AS max_date FROM clean_prices")
+        snapshot = json.dumps(clean.iloc[0].to_dict(), default=str, sort_keys=True)
+        versions = {}
+        for package in ("duckdb", "pandas", "numpy", "pyarrow", "fastapi"):
+            try:
+                versions[package] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                versions[package] = "unknown"
+        return {
+            "git_sha": git_sha,
+            "config_hash": hashlib.sha256(json.dumps(config, default=str, sort_keys=True).encode()).hexdigest(),
+            "data_snapshot": hashlib.sha256(snapshot.encode()).hexdigest(),
+            "library_versions": json.dumps(versions, sort_keys=True),
+        }
 
     def load_raw(self) -> pd.DataFrame:
         files = list((self.root / "raw" / "prices").glob("symbol=*/*.parquet"))
@@ -61,15 +113,26 @@ class Store:
         metrics: dict[str, Any],
         equity: pd.DataFrame,
         positions: pd.DataFrame,
+        research: pd.DataFrame | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> None:
         self.db.execute(
-            "INSERT INTO backtest_runs VALUES (?, current_timestamp, ?, ?)",
-            [run_id, json.dumps(config, default=str), json.dumps(metrics, default=str)],
+            """INSERT INTO backtest_runs
+            (run_id, created_at, config, metrics, git_sha, config_hash, data_snapshot, library_versions)
+            VALUES (?, current_timestamp, ?, ?, ?, ?, ?, ?)""",
+            [
+                run_id,
+                json.dumps(config, default=str),
+                json.dumps(metrics, default=str),
+                *(metadata or self.reproducibility_metadata(config)).values(),
+            ],
         )
         out = self.root / "results" / run_id
         out.mkdir(parents=True, exist_ok=True)
         equity.to_parquet(out / "equity.parquet", index=False)
         positions.to_parquet(out / "positions.parquet", index=False)
+        if research is not None:
+            research.to_parquet(out / "research.parquet", index=False)
 
     def new_run_id(self) -> str:
         return uuid.uuid4().hex
