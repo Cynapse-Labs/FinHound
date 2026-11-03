@@ -1,5 +1,7 @@
 PYTHON ?= python3
 all: ingest qc factors signal backtest
+run:
+	PYTHONPATH=services/core/src DATA_ROOT=data SETTINGS_PATH=config/settings.yaml $(PYTHON) -m core.pipeline all
 build:
 	docker compose build
 up:

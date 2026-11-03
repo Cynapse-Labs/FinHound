@@ -29,3 +29,17 @@ def generate_signal(store: Store, settings_path: str | Path = "/config/settings.
     path.mkdir(exist_ok=True)
     out.to_parquet(path / f"{name}.parquet", index=False)
     return out
+
+
+def generate_baseline_momentum(store: Store) -> pd.DataFrame:
+    prices = store.query("SELECT date, symbol, close FROM clean_prices WHERE symbol <> 'SPY'")
+    prices["date"] = pd.to_datetime(prices["date"]).dt.date
+    close = prices.pivot(index="date", columns="symbol", values="close").sort_index()
+    score = close.shift(21).div(close.shift(273)).sub(1)
+    out = score.stack(dropna=False).rename("score").reset_index()
+    out.columns = ["date", "symbol", "score"]
+    out["score"] = out["score"].astype("float64")
+    path = store.root / "signals"
+    path.mkdir(exist_ok=True)
+    out.to_parquet(path / "momentum_12_1_baseline.parquet", index=False)
+    return out

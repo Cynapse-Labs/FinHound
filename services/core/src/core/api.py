@@ -1,20 +1,35 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .backtest import run_backtest
 from .store import Store
 
 app = FastAPI(title="QuantPlatform", version="1.0.0")
-store = Store()
+store = Store(read_only=os.getenv("API_READ_ONLY", "1") != "0")
+jobs: dict[str, dict[str, Any]] = {}
+job_lock = threading.Lock()
+allowed_origins = [x for x in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if x]
+if allowed_origins:
+    app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["*"], allow_headers=["*"])
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    expected = os.getenv("API_KEY")
+    if expected and x_api_key != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing API key")
 
 
 class BacktestConfig(BaseModel):
@@ -24,12 +39,22 @@ class BacktestConfig(BaseModel):
     rebalance_frequency: str = Field("weekly", pattern="^(daily|weekly|monthly)$")
     quantile: float = Field(0.1, gt=0, le=1)
     max_position_weight: float = Field(0.25, gt=0, le=1)
-    commission_bps: float = Field(1.0, ge=0)
-    slippage_bps: float = Field(2.0, ge=0)
-    borrow_bps: float = Field(50.0, ge=0)
+    commission_bps: float = Field(1.0, ge=0, le=1000)
+    slippage_bps: float = Field(2.0, ge=0, le=1000)
+    borrow_bps: float = Field(50.0, ge=0, le=10000)
     start_date: date | None = None
     end_date: date | None = None
     split_date: date | None = None
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> BacktestConfig:
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("start_date must be on or before end_date")
+        if self.split_date and self.start_date and self.split_date < self.start_date:
+            raise ValueError("split_date must be inside the backtest range")
+        if self.split_date and self.end_date and self.split_date > self.end_date:
+            raise ValueError("split_date must be inside the backtest range")
+        return self
 
 
 @app.get("/health")
@@ -93,13 +118,37 @@ def signal(name: str) -> list[dict[str, Any]]:
     return pd.read_parquet(path).to_dict("records")
 
 
-@app.post("/backtests", status_code=201)
-def backtests(config: BacktestConfig) -> dict[str, str]:
+@app.post("/backtests", status_code=202)
+def backtests(config: BacktestConfig, _: None = Depends(require_api_key)) -> dict[str, str]:
     path = store.root / "signals" / f"{config.signal_name}.parquet"
     if not path.exists():
         raise HTTPException(404, "signal not found")
-    run_id, _ = run_backtest(store, pd.read_parquet(path), config.model_dump(exclude={"signal_name"}))
-    return {"run_id": run_id}
+    job_id = uuid.uuid4().hex
+    with job_lock:
+        jobs[job_id] = {"status": "queued"}
+
+    def worker() -> None:
+        with job_lock:
+            jobs[job_id] = {"status": "running"}
+        try:
+            run_id, _ = run_backtest(store, pd.read_parquet(path), config.model_dump(exclude={"signal_name"}))
+            with job_lock:
+                jobs[job_id] = {"status": "completed", "run_id": run_id}
+        except Exception as exc:
+            with job_lock:
+                jobs[job_id] = {"status": "failed", "error": str(exc)}
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"job_id": job_id}
+
+
+@app.get("/backtests/jobs/{job_id}")
+def backtest_job(job_id: str) -> dict[str, Any]:
+    with job_lock:
+        job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    return {"job_id": job_id, **job}
 
 
 @app.get("/backtests")

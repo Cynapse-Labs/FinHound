@@ -185,7 +185,9 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     if config.get("end_date"):
         close = close.loc[close.index <= pd.Timestamp(config["end_date"]).date()]
     signal_p = signal.pivot(index="date", columns="symbol", values="score").reindex(close.index)
-    tradable = [c for c in close.columns if c != "SPY"]
+    membership = store.query("SELECT DISTINCT symbol FROM universe_membership WHERE tradable = true")
+    tradable = membership["symbol"].tolist() if not membership.empty else [c for c in close.columns if c != "SPY"]
+    tradable = [symbol for symbol in tradable if symbol in close.columns]
     weights, turnover = build_target_weights(
         signal_p[tradable],
         tradable,
@@ -237,6 +239,7 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         "annual_turnover": float(traded_turnover.mean() * 252),
         **diagnostics,
     }
+    result["reproducibility"] = store.reproducibility_metadata(config)
     store.save_backtest(
         run_id,
         config,
@@ -244,5 +247,6 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         equity,
         executed.reset_index().melt("date", var_name="symbol", value_name="weight"),
         research,
+        result["reproducibility"],
     )
     return run_id, result

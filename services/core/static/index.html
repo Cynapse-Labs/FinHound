@@ -72,13 +72,22 @@
         body: JSON.stringify({signal_name: 'momentum_reversal_liquidity', mode: 'long_only', quantile: .1,
           max_position_weight: .25, rebalance_frequency: 'weekly'}) }).then((r) => r.json());
       $('backtest-output').textContent = JSON.stringify(result, null, 2);
-      if (result.run_id) {
-        const rows = await get(`/backtests/${result.run_id}/equity`);
+      let runId = result.run_id;
+      if (result.job_id) {
+        for (let i = 0; i < 120; i += 1) {
+          const job = await get(`/backtests/jobs/${result.job_id}`);
+          if (job.status === 'completed') { runId = job.run_id; break; }
+          if (job.status === 'failed') throw new Error(job.error);
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+      if (runId) {
+        const rows = await get(`/backtests/${runId}/equity`);
         chart($('equity-chart'), rows.map((x) => x.strategy));
         chart($('drawdown-chart'), rows.map((x) => x.drawdown));
         chart($('exposure-chart'), rows.map((x) => x.gross_exposure));
       }
-      await loadResearch(result.run_id);
+      await loadResearch(runId);
     }
     document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
       document.querySelectorAll('section').forEach((section) => section.classList.toggle('active', section.id === button.dataset.tab));

@@ -18,3 +18,4 @@ backtest:
   commission_bps: 1.0
   slippage_bps: 2.0
   borrow_bps: 50.0
+  delisting_return: -1.0

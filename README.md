@@ -357,6 +357,11 @@ fixtures and provider stubs.
 
 ## 10. Important limitations
 
+> **These are current blockers, not theoretical concerns:** the universe is
+> still a static current-constituents list, free vendor data is not
+> point-in-time, and the 50-name universe is small for cross-sectional
+> statistics. Do not interpret historical results as free of survivorship bias.
+
 - The universe is a current-constituents list, so results carry survivorship
   bias. A production version needs point-in-time membership and delisted names
   from a vendor such as Tiingo, Polygon, Sharadar, or Norgate.
@@ -386,3 +391,41 @@ fixtures and provider stubs.
 ## License
 
 See [LICENSE](LICENSE).
+
+## Production readiness
+
+| Area | Status |
+|---|---|
+| Separate ingest/core environments | Done |
+| File-based service boundary | Done |
+| Raw Parquet and DuckDB research store | Done |
+| QC, factors, signals, and t+1 backtesting | Done |
+| Reproducibility metadata | Done |
+| API key, background backtest jobs, and CORS controls | Done |
+| GitHub Actions test/lint workflow | Done |
+| Point-in-time universe and delisted securities | **Blocked** |
+| Licensed point-in-time market data | **Blocked** |
+| Complete corporate-action/total-return validation | **Blocked** |
+| Production container image digests and deployment target | **Blocked** |
+
+The blocked data items require an owner decision about vendor, licensing,
+history coverage, and deployment environment; the repository does not pretend
+that a static current universe solves survivorship bias.
+
+The API defaults to `API_READ_ONLY=1`, so it opens DuckDB read-only while a
+pipeline process owns writes. The pipeline should publish a completed database
+before restarting the API against it; this avoids concurrent DuckDB writers.
+Set `API_READ_ONLY=0` only for local initialization or development.
+
+## Open owner decisions
+
+These are intentionally not guessed:
+
+- Which licensed point-in-time market-data vendor and contract should be used?
+- Which deployment target, hostname, TLS termination, and persistent-volume
+  model should be supported?
+- Should API authentication be a shared API key, an identity provider, or
+  another mechanism?
+- What QC error and ingestion-failure thresholds should page an operator?
+- What total-return and delisting-return policy should be approved for the
+  production research benchmark?
