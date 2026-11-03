@@ -23,7 +23,7 @@ class BacktestConfig(BaseModel):
     mode: str = Field("long_only", pattern="^(long_only|long_short)$")
     rebalance_frequency: str = Field("weekly", pattern="^(daily|weekly|monthly)$")
     quantile: float = Field(0.1, gt=0, le=1)
-    max_position_weight: float = Field(1.0, gt=0, le=1)
+    max_position_weight: float = Field(0.25, gt=0, le=1)
     commission_bps: float = Field(1.0, ge=0)
     slippage_bps: float = Field(2.0, ge=0)
     borrow_bps: float = Field(50.0, ge=0)
@@ -123,6 +123,14 @@ def equity(run_id: str) -> list[dict[str, Any]]:
     path = store.root / "results" / run_id / "equity.parquet"
     if not path.exists():
         raise HTTPException(404, "backtest not found")
+    return pd.read_parquet(path).to_dict("records")
+
+
+@app.get("/backtests/{run_id}/research")
+def research(run_id: str) -> list[dict[str, Any]]:
+    path = store.root / "results" / run_id / "research.parquet"
+    if not path.exists():
+        raise HTTPException(404, "backtest research not found")
     return pd.read_parquet(path).to_dict("records")
 
 

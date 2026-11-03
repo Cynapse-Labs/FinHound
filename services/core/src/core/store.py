@@ -61,6 +61,7 @@ class Store:
         metrics: dict[str, Any],
         equity: pd.DataFrame,
         positions: pd.DataFrame,
+        research: pd.DataFrame | None = None,
     ) -> None:
         self.db.execute(
             "INSERT INTO backtest_runs VALUES (?, current_timestamp, ?, ?)",
@@ -70,6 +71,8 @@ class Store:
         out.mkdir(parents=True, exist_ok=True)
         equity.to_parquet(out / "equity.parquet", index=False)
         positions.to_parquet(out / "positions.parquet", index=False)
+        if research is not None:
+            research.to_parquet(out / "research.parquet", index=False)
 
     def new_run_id(self) -> str:
         return uuid.uuid4().hex

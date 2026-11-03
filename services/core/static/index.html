@@ -27,9 +27,11 @@
   <section id="health" class="active"><h2>Data Health</h2><div id="health-output"></div></section>
   <section id="factors"><h2>Factors</h2><label>Symbol <input id="factor-symbol" value="AAPL"></label>
     <button id="load-factors">Load</button><canvas id="factor-chart" width="1000" height="280"></canvas></section>
-  <section id="research"><h2>Signal Research</h2><p>Research diagnostics are persisted with each backtest.</p><pre id="research-output"></pre></section>
+  <section id="research"><h2>Signal Research</h2><p>Research diagnostics are persisted with each backtest.</p>
+    <pre id="research-output"></pre><canvas id="ic-chart" width="1000" height="280"></canvas></section>
   <section id="backtest"><h2>Backtest</h2><button id="run-backtest">Run default backtest</button>
-    <pre id="backtest-output"></pre><canvas id="equity-chart" width="1000" height="280"></canvas></section>
+    <pre id="backtest-output"></pre><canvas id="equity-chart" width="1000" height="280"></canvas>
+    <canvas id="drawdown-chart" width="1000" height="280"></canvas><canvas id="exposure-chart" width="1000" height="280"></canvas></section>
   <script>
     const $ = (id) => document.getElementById(id);
     async function get(url) { const response = await fetch(url); if (!response.ok) throw new Error(await response.text()); return response.json(); }
@@ -57,16 +59,26 @@
       const rows = await get(`/factors/${encodeURIComponent($('factor-symbol').value)}`);
       chart($('factor-chart'), rows.filter((x) => x.factor === 'momentum_12_1').map((x) => x.standardized));
     }
-    async function loadResearch() {
+    async function loadResearch(runId) {
       const runs = await get('/backtests'); $('research-output').textContent = JSON.stringify(runs, null, 2);
+      const selected = runId || (runs[0] && runs[0].run_id);
+      if (selected) {
+        const rows = await get(`/backtests/${selected}/research`);
+        chart($('ic-chart'), rows.filter((x) => x.kind === 'ic' && x.horizon === 1).map((x) => x.value));
+      }
     }
     async function runBacktest() {
       const result = await fetch('/backtests', { method: 'POST', headers: {'content-type': 'application/json'},
         body: JSON.stringify({signal_name: 'momentum_reversal_liquidity', mode: 'long_only', quantile: .1,
-          max_position_weight: .1, rebalance_frequency: 'weekly'}) }).then((r) => r.json());
+          max_position_weight: .25, rebalance_frequency: 'weekly'}) }).then((r) => r.json());
       $('backtest-output').textContent = JSON.stringify(result, null, 2);
-      if (result.run_id) chart($('equity-chart'), (await get(`/backtests/${result.run_id}/equity`)).map((x) => x.strategy));
-      await loadResearch();
+      if (result.run_id) {
+        const rows = await get(`/backtests/${result.run_id}/equity`);
+        chart($('equity-chart'), rows.map((x) => x.strategy));
+        chart($('drawdown-chart'), rows.map((x) => x.drawdown));
+        chart($('exposure-chart'), rows.map((x) => x.gross_exposure));
+      }
+      await loadResearch(result.run_id);
     }
     document.querySelectorAll('[data-tab]').forEach((button) => button.onclick = () => {
       document.querySelectorAll('section').forEach((section) => section.classList.toggle('active', section.id === button.dataset.tab));
