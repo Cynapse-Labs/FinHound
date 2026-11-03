@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from .analytics import performance_metrics
 from .store import Store
 
 log = structlog.get_logger()
@@ -19,53 +20,23 @@ def apply_costs(
     borrow_bps: float,
     short_exposure: pd.Series,
 ) -> pd.Series:
-    cost = turnover * (commission_bps + slippage_bps) / 10000
+    for name, value in {
+        "commission_bps": commission_bps,
+        "slippage_bps": slippage_bps,
+        "borrow_bps": borrow_bps,
+    }.items():
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be finite and non-negative")
+    turnover = turnover.astype(float).fillna(0.0)
+    gross = gross.astype(float).fillna(0.0)
+    short_exposure = short_exposure.astype(float).fillna(0.0)
+    cost = turnover.clip(lower=0) * (commission_bps + slippage_bps) / 10000
     borrow = short_exposure.abs() * borrow_bps / 10000 / 252
     return gross - cost - borrow
 
 
 def metrics(returns: pd.Series, periods: int = 252) -> dict[str, float]:
-    returns = returns.fillna(0.0)
-    if returns.empty:
-        return {
-            "CAGR": 0.0,
-            "annualized_volatility": 0.0,
-            "Sharpe": 0.0,
-            "Sortino": 0.0,
-            "max_drawdown": 0.0,
-            "Calmar": 0.0,
-            "hit_rate": 0.0,
-            "VaR_95": 0.0,
-            "CVaR_95": 0.0,
-            "tail_ratio": 0.0,
-            "worst_day": 0.0,
-        }
-    equity = (1 + returns).cumprod()
-    years = len(returns) / periods
-    cagr = equity.iloc[-1] ** (1 / years) - 1 if years and equity.iloc[-1] > 0 else 0.0
-    vol = returns.std(ddof=1) * np.sqrt(periods)
-    sharpe = returns.mean() / returns.std(ddof=1) * np.sqrt(periods) if vol else 0.0
-    downside = returns.where(returns < 0, 0).std(ddof=1) * np.sqrt(periods)
-    drawdown = equity / equity.cummax() - 1
-    max_dd = float(drawdown.min())
-    var_95 = float(returns.quantile(0.05))
-    tail = returns[returns <= var_95]
-    cvar_95 = float(tail.mean()) if not tail.empty else var_95
-    upper = float(returns.quantile(0.95))
-    tail_ratio = upper / abs(var_95) if var_95 < 0 else 0.0
-    return {
-        "CAGR": float(cagr),
-        "annualized_volatility": float(vol),
-        "Sharpe": float(sharpe),
-        "Sortino": float(returns.mean() * periods / downside) if downside else 0.0,
-        "max_drawdown": max_dd,
-        "Calmar": float(cagr / abs(max_dd)) if max_dd else 0.0,
-        "hit_rate": float((returns > 0).mean()),
-        "VaR_95": var_95,
-        "CVaR_95": cvar_95,
-        "tail_ratio": float(tail_ratio),
-        "worst_day": float(returns.min()),
-    }
+    return performance_metrics(returns, periods=periods)
 
 
 def validate_backtest_config(config: dict[str, Any]) -> None:
@@ -87,6 +58,27 @@ def validate_backtest_config(config: dict[str, Any]) -> None:
     long_fraction = float(config.get("long_fraction", 0.5))
     if mode == "long_short" and not 0 <= long_fraction <= 1:
         raise ValueError("long_fraction must be between 0 and 1")
+    if mode == "long_only" and long_fraction != 0.5:
+        raise ValueError("long_fraction is only valid for long_short mode")
+    for name in ("commission_bps", "slippage_bps", "borrow_bps"):
+        value = float(config.get(name, 0.0))
+        if not np.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be finite and non-negative")
+    terminal_return = float(config.get("delisting_return", -1.0))
+    if not np.isfinite(terminal_return) or terminal_return < -1:
+        raise ValueError("delisting_return must be finite and at least -1")
+    if config.get("target_volatility") is not None:
+        target_volatility = float(config["target_volatility"])
+        if not np.isfinite(target_volatility) or target_volatility <= 0:
+            raise ValueError("target_volatility must be finite and positive")
+    for name in ("drawdown_stop", "drawdown_resume"):
+        if config.get(name) is not None:
+            value = float(config[name])
+            if not np.isfinite(value) or value <= 0 or value >= 1:
+                raise ValueError(f"{name} must be finite and between 0 and 1")
+    if config.get("drawdown_stop") is not None and config.get("drawdown_resume") is not None:
+        if float(config["drawdown_resume"]) > float(config["drawdown_stop"]):
+            raise ValueError("drawdown_resume cannot exceed drawdown_stop")
 
 
 def capped_equal_weights(
@@ -153,7 +145,7 @@ def build_target_weights(
         n = max(1, int(np.ceil(len(valid) * quantile)))
         if mode == "long_short":
             winners = valid.nlargest(n).index
-            losers = valid.nsmallest(n).index
+            losers = valid.drop(winners, errors="ignore").nsmallest(n).index
             weights.loc[day, winners] = capped_equal_weights(winners, long_gross, cap)
             weights.loc[day, losers] = capped_equal_weights(losers, short_gross, cap, -1.0)
         else:
@@ -390,7 +382,7 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     in_sample = net.loc[net.index < pd.Timestamp(split).date()] if split else net
     out_sample = net.loc[net.index >= pd.Timestamp(split).date()] if split else net.iloc[0:0]
     result = {
-        "full": metrics(net),
+        "full": performance_metrics(net, benchmark=spy_returns),
         "in_sample": metrics(in_sample),
         "out_of_sample": metrics(out_sample),
         "average_holdings": float((executed != 0).sum(axis=1).mean()),

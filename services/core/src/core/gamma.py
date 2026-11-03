@@ -114,3 +114,32 @@ def gamma_exposure(
         "gamma_flip": flip,
         "strikes": strikes.to_dict(orient="records"),
     }
+
+
+def gamma_heatmap(chain: pd.DataFrame, *, spot: float | None = None, symbol: str | None = None) -> dict[str, Any]:
+    """Return a strike/expiration matrix suitable for a gamma heat map."""
+    frame = _normalise_chain(chain, spot)
+    if symbol is not None and ("symbol" not in frame or frame["symbol"].isna().all()):
+        frame["symbol"] = symbol
+    if symbol is not None and "symbol" in frame:
+        frame = frame.loc[frame["symbol"].astype(str).str.upper() == symbol.upper()].copy()
+    if frame.empty:
+        return {"symbol": symbol.upper() if symbol else None, "strikes": [], "expirations": [], "cells": [], "max_abs_exposure": 0.0}
+    if "expiration" not in frame:
+        frame["expiration"] = "all"
+    else:
+        frame["expiration"] = pd.to_datetime(frame["expiration"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("all")
+    grouped = (
+        frame.groupby(["expiration", "strike"], as_index=False)
+        .agg(gamma_exposure=("gamma_exposure", "sum"), contracts=("open_interest", "sum"))
+        .sort_values(["expiration", "strike"])
+    )
+    cells = grouped.to_dict(orient="records")
+    return {
+        "symbol": symbol.upper() if symbol else None,
+        "spot": float(frame["spot"].median()),
+        "strikes": sorted(float(value) for value in grouped["strike"].unique()),
+        "expirations": sorted(str(value) for value in grouped["expiration"].unique()),
+        "cells": cells,
+        "max_abs_exposure": float(grouped["gamma_exposure"].abs().max()),
+    }

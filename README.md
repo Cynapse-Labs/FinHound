@@ -243,6 +243,29 @@ worst-day return, and tail ratio), maximum observed position weight, and
 average concentration HHI. Invalid portfolio settings are rejected before
 trading weights are generated.
 
+The backtest performance contract also includes annualized downside-aware and
+benchmark-relative measures: Sortino, Calmar, skew, excess kurtosis, Omega,
+beta, alpha, tracking error, information ratio, and benchmark correlation.
+Returns are cleaned of non-finite observations, constant or short samples
+produce finite values, and long/short selection prevents a symbol from being
+held on both sides of the book at a rebalance.
+
+Each persisted backtest also exposes `GET /backtests/{run_id}/risk`, which
+returns the aggregate metrics, causal rolling volatility/Sharpe/drawdown/beta,
+and ranked drawdown episodes with recovery status. This endpoint is intended
+for monitoring and model review; it does not replace independent execution,
+limit, liquidity, or regulatory controls.
+
+QC eligibility now keeps only symbols whose latest available market session
+has a close of at least `$1` and volume of at least `5,000` shares. The full
+history for excluded symbols is removed from `clean_prices` and an
+`latest_session_eligibility` error is recorded in `qc_issues`; raw provider
+data remains available for audit.
+
+Options research also exposes `POST /options/gamma-heatmap`, returning
+expiration/strike gamma cells, axes, spot, and the maximum absolute exposure
+for direct heat-map rendering.
+
 ### Environment variables
 
 | Variable | Default | Purpose |

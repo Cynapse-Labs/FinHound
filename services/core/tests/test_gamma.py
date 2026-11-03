@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-from core.gamma import gamma_exposure
+from core.gamma import gamma_exposure, gamma_heatmap
 
 
 def test_gamma_exposure_aggregates_calls_puts_and_flip() -> None:
@@ -26,3 +26,18 @@ def test_gamma_exposure_requires_spot_when_missing() -> None:
     chain = pd.DataFrame([{"strike": 100, "option_type": "call", "gamma": 0.1, "open_interest": 1}])
     with pytest.raises(ValueError, match="spot is required"):
         gamma_exposure(chain)
+
+
+def test_gamma_heatmap_groups_expiration_and_strike() -> None:
+    chain = pd.DataFrame(
+        [
+            {"expiration": "2024-01-19", "strike": 100, "option_type": "call", "gamma": 0.1, "open_interest": 10, "spot": 100},
+            {"expiration": "2024-01-19", "strike": 100, "option_type": "put", "gamma": 0.05, "open_interest": 10, "spot": 100},
+            {"expiration": "2024-02-16", "strike": 110, "option_type": "call", "gamma": 0.1, "open_interest": 10, "spot": 100},
+        ]
+    )
+    result = gamma_heatmap(chain)
+
+    assert result["expirations"] == ["2024-01-19", "2024-02-16"]
+    assert result["strikes"] == [100.0, 110.0]
+    assert len(result["cells"]) == 2
