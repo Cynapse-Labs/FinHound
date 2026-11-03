@@ -369,6 +369,9 @@ fixtures and provider stubs.
 - Corporate-action handling depends on what the provider returns. Verify split
   and dividend adjustment semantics before using results for investment
   decisions.
+- The static-universe fallback records a survivorship-bias warning in run
+  metadata; dated membership must be populated before the universe is
+  point-in-time.
 - Fundamentals are excluded because they require point-in-time data handling.
 - Backtest results are research output and not evidence of future performance.
 - The default dashboard is intentionally small; it provides data-health,

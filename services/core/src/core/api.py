@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .backtest import run_backtest
@@ -24,6 +24,15 @@ job_lock = threading.Lock()
 allowed_origins = [x for x in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if x]
 if allowed_origins:
     app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    expected = os.getenv("API_KEY")
+    public = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
+    if expected and request.url.path not in public and request.headers.get("x-api-key") != expected:
+        return JSONResponse({"detail": "invalid or missing API key"}, status_code=401)
+    return await call_next(request)
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)) -> None:

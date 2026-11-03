@@ -188,6 +188,14 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
     membership = store.query("SELECT DISTINCT symbol FROM universe_membership WHERE tradable = true")
     tradable = membership["symbol"].tolist() if not membership.empty else [c for c in close.columns if c != "SPY"]
     tradable = [symbol for symbol in tradable if symbol in close.columns]
+    if not membership.empty:
+        for day in signal_p.index:
+            active = store.query(
+                "SELECT symbol FROM universe_membership WHERE tradable = true "
+                "AND start_date <= ? AND (end_date IS NULL OR end_date >= ?)",
+                [day, day],
+            )["symbol"].tolist()
+            signal_p.loc[day, [s for s in tradable if s not in active]] = np.nan
     weights, turnover = build_target_weights(
         signal_p[tradable],
         tradable,
@@ -197,7 +205,13 @@ def run_backtest(store: Store, signal: pd.DataFrame, config: dict[str, Any]) -> 
         config.get("rebalance_frequency", "weekly"),
     )
     executed = weights.shift(1).fillna(0.0)
-    returns = close.pct_change().shift(-1).fillna(0.0)
+    returns = close.pct_change().shift(-1)
+    terminal_return = float(config.get("delisting_return", -1.0))
+    for symbol in close.columns:
+        valid_dates = close[symbol].dropna().index
+        if len(valid_dates):
+            returns.loc[valid_dates[-1], symbol] = terminal_return
+    returns = returns.fillna(0.0)
     gross = (executed * returns).sum(axis=1)
     traded_turnover = turnover.shift(1).fillna(0.0)
     short = executed.clip(upper=0).abs().sum(axis=1)
