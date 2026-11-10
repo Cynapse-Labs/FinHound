@@ -1,5 +1,5 @@
 duckdb==2.0.0
-pandas==3.1.0
+pandas==3.1.1
 numpy==2.4.6
 pyarrow==26.0.0
 fastapi==0.162.0
