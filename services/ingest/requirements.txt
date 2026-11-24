@@ -3,6 +3,6 @@ openbb-equity==2.0.0
 openbb-yfinance==2.1.0
 pandas==3.1.0
 pyarrow==26.0.0
-PyYAML==6.0.3
+PyYAML==6.0.4
 tenacity==9.2.1
 structlog==26.1.0
